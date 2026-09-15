@@ -1,12 +1,12 @@
 {
-  "left": "C:\\Users\\Sicaja\\OneDrive\\02_Bussines\\01_official\\01_DB_light-data-bussiness-defined-and-light-bussiness-assets\\2026.03.06_Evergreen\\assets\\01_car",
-  "right": "",
+  "left": "C:/Users/Sicaja/Desktop/New folder",
+  "right": "C:/Users/Sicaja/Desktop/New folder",
   "left_recursive": false,
   "left_folders": false,
   "left_files": true,
   "right_recursive": false,
   "right_folders": true,
-  "right_files": false,
+  "right_files": true,
   "font_family": "SF Mono",
   "font_size": 12
 }

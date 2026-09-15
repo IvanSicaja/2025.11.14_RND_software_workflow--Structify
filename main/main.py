@@ -61,6 +61,56 @@ def get_folder_structure(root_path, recursive=True, include_folders=True, includ
     return structure
 
 
+def get_folder_structure_with_paths(root_path, recursive=True,
+                                    include_folders=True, include_files=True):
+    """Like get_folder_structure but also returns a parallel list of absolute paths."""
+    display_lines = []
+    abs_paths     = []
+
+    if not recursive:
+        try:
+            entries = sorted(os.listdir(root_path))
+        except PermissionError:
+            return display_lines, abs_paths
+        for name in entries:
+            full_path = os.path.join(root_path, name)
+            if os.path.isdir(full_path) and include_folders:
+                display_lines.append(name)
+                abs_paths.append(full_path)
+            elif os.path.isfile(full_path) and include_files:
+                display_lines.append(name)
+                abs_paths.append(full_path)
+        return display_lines, abs_paths
+
+    for dirpath, dirnames, filenames in os.walk(root_path, topdown=True):
+        dirnames.sort()
+        rel_path = os.path.relpath(dirpath, root_path)
+        if rel_path == '.':
+            depth = 0
+        else:
+            depth = rel_path.count(os.sep) + 1
+
+        indent      = '  ' * (depth - 1) if depth > 0 else ''
+        child_indent = '  ' * depth if rel_path == '.' else '  ' * depth
+
+        if rel_path != '.':
+            folder_name = os.path.basename(dirpath)
+            if include_folders:
+                display_lines.append(f"{indent}{folder_name}")
+                abs_paths.append(dirpath)
+            if include_files:
+                for fname in sorted(filenames):
+                    display_lines.append(f"{'  ' * depth}{fname}")
+                    abs_paths.append(os.path.join(dirpath, fname))
+        else:
+            if include_files:
+                for fname in sorted(filenames):
+                    display_lines.append(fname)
+                    abs_paths.append(os.path.join(dirpath, fname))
+
+    return display_lines, abs_paths
+
+
 class LineNumberArea(QWidget):
     """Gutter widget that paints line numbers next to a QTextEdit."""
 
@@ -593,7 +643,15 @@ class FolderStructureApp(QMainWindow):
         self._coloring_in_progress = False
         self._sync_scroll_active   = False
         self._syncing_scroll       = False
+        # Stores the absolute path for every line produced by the last left Scan.
+        # Index N here matches line N in left_preview exactly.
+        # Cleared when the user edits the left preview manually.
+        self._left_abs_paths = []
         self._load_last_paths()
+        # If the user manually edits the left preview, the stored abs paths
+        # are no longer valid — clear them so fallback reconstruction is used.
+        # We connect after _load_last_paths so the initial setText doesn't clear.
+        self.left_preview.text_changed.connect(self._on_left_preview_manually_changed)
 
     # ── Style helpers ────────────────────────────────────────────────────────
     def _blue_btn_style(self):
@@ -703,6 +761,16 @@ class FolderStructureApp(QMainWindow):
         preview = LineNumberedEditor()
         layout.addWidget(preview, stretch=1)
         setattr(self, f"{prefix}_preview", preview)
+
+    # ── Left preview edit tracking ──────────────────────────────────────────
+    def _on_left_preview_manually_changed(self):
+        """Called whenever the left preview content changes (typing, paste, scan).
+        If the line count no longer matches our stored abs-path list, clear it
+        so batch_rename falls back to indentation reconstruction."""
+        current_lines = [l for l in self.left_preview.toPlainText().splitlines()
+                         if l.strip()]
+        if len(current_lines) != len(self._left_abs_paths):
+            self._left_abs_paths = []
 
     # ── Persistence ──────────────────────────────────────────────────────────
     def _load_last_paths(self):
@@ -836,10 +904,15 @@ class FolderStructureApp(QMainWindow):
         include_folders = getattr(self, f"{prefix}_cb_folders").isChecked()
         include_files   = getattr(self, f"{prefix}_cb_files").isChecked()
         try:
-            lines = get_folder_structure(path, recursive, include_folders, include_files)
+            lines, abs_paths = get_folder_structure_with_paths(
+                path, recursive, include_folders, include_files)
             self._pause_compare()
             getattr(self, f"{prefix}_preview").setPlainText("\n".join(lines))
             self._resume_compare()
+            # Store absolute paths for the left panel so batch_rename can use
+            # them directly instead of reconstructing from indentation.
+            if prefix == "left":
+                self._left_abs_paths = abs_paths
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Cannot read structure:\n{str(e)}")
 
@@ -1154,18 +1227,30 @@ class FolderStructureApp(QMainWindow):
                                 "Please set a valid Left source folder path.")
             return
 
-        path_stack     = [root]
-        left_abs_paths = []
+        # ── Resolve absolute paths for each left preview line ──
+        #
+        # PRIORITY: if we have stored abs paths from the last Scan (and the
+        # line count still matches), use them directly — 100% reliable even
+        # when subfolder names are duplicated across the tree.
+        #
+        # FALLBACK: reconstruct from indentation (works for manually typed
+        # content or when the user edited the preview after scanning).
 
-        for line in left_lines:
-            indent = len(line) - len(line.lstrip())
-            level  = indent // 2
-            name   = line.strip()
-            while len(path_stack) > level + 1:
-                path_stack.pop()
-            abs_path = os.path.join(path_stack[-1], name)
-            left_abs_paths.append(abs_path)
-            path_stack.append(abs_path)
+        if self._left_abs_paths and len(self._left_abs_paths) == len(left_lines):
+            left_abs_paths = list(self._left_abs_paths)
+        else:
+            # Indentation-based reconstruction
+            path_stack     = [root]
+            left_abs_paths = []
+            for line in left_lines:
+                indent = len(line) - len(line.lstrip())
+                level  = indent // 2
+                name   = line.strip()
+                while len(path_stack) > level + 1:
+                    path_stack.pop()
+                abs_path = os.path.join(path_stack[-1], name)
+                left_abs_paths.append(abs_path)
+                path_stack.append(abs_path)
 
         ops = []
         for i, (old_abs, right_line) in enumerate(zip(left_abs_paths, right_lines)):
@@ -1282,7 +1367,33 @@ class FolderStructureApp(QMainWindow):
                     f'  Error: {e}'
                 )
 
+        conflicts = []   # target name already exists — original preserved
+
         for temp_abs, final_abs, original_abs, old_name, new_name in phase2_ops:
+            # ── Pre-check: target already exists? ──
+            # Check among the files that are NOT currently temp-named.
+            # (All files being renamed are in temp state now, so a conflict
+            # means a completely different file already carries that name.)
+            if os.path.exists(final_abs):
+                # Roll back: restore original name immediately
+                try:
+                    os.rename(temp_abs, original_abs)
+                    restore_note = "Original name preserved — no data lost."
+                except Exception as re2:
+                    restore_note = (
+                        f"⚠ RESTORE FAILED — file is temporarily named:\n"
+                        f"  {temp_abs}\n"
+                        f"  Rename it back manually to: {os.path.basename(original_abs)}\n"
+                        f"  Restore error: {re2}"
+                    )
+                conflicts.append(
+                    f'CONFLICT  "{old_name}"  →  "{new_name}"\n'
+                    f'  A file named "{new_name}" already exists in:\n'
+                    f'  {os.path.dirname(final_abs)}\n'
+                    f'  {restore_note}'
+                )
+                continue
+
             try:
                 os.rename(temp_abs, final_abs)
                 renamed.append(f"{old_name}  →  {new_name}")
@@ -1310,6 +1421,17 @@ class FolderStructureApp(QMainWindow):
             summary_lines.append("")
             for r in renamed:
                 summary_lines.append(f"  {r}")
+        if conflicts:
+            if summary_lines:
+                summary_lines.append("")
+            summary_lines.append(
+                f"⚠️  {len(conflicts)} conflict(s) — target name already exists "
+                f"(originals preserved, nothing lost):"
+            )
+            summary_lines.append("")
+            for c in conflicts:
+                summary_lines.append(f"  {c}")
+                summary_lines.append("")
         if skipped:
             if summary_lines:
                 summary_lines.append("")
