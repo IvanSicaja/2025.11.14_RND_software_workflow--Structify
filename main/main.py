@@ -490,6 +490,7 @@ class FolderStructureApp(QMainWindow):
             "Sync scroll — scrolling one preview scrolls the other simultaneously")
         self.cb_sync_scroll.setStyleSheet(self.LS+"font-weight:500;")
         self.cb_sync_scroll.stateChanged.connect(self._on_sync_scroll_toggled)
+        self.cb_sync_scroll.setChecked(True)   # ON by default
         sr.addWidget(self.cb_sync_scroll)
 
         lay.addWidget(self._hr())
@@ -651,30 +652,38 @@ class FolderStructureApp(QMainWindow):
         self.tab2_right_editor = LineNumberedEditor()
         right_col.addWidget(self.tab2_right_editor, stretch=1)
 
-        # Bottom info + legend
+        # ── Bottom: workflow info + legend ──
         lay.addWidget(self._hr())
 
-        info_row = QHBoxLayout(); info_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lay.addLayout(info_row)
-        info = QLabel(
-            "Line N on the left gets renamed to Line N on the right.  "
-            "The → button copies left names to right so you only edit what needs changing.")
-        info.setStyleSheet(self.LS+"font-size:10px;"); info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        info_row.addWidget(info)
+        # Workflow explanation — centred, concise, crystal-clear
+        wf_row = QHBoxLayout(); wf_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addLayout(wf_row)
+        wf = QLabel(
+            "<b>Workflow:</b>  "
+            "<b>① Scan</b> a folder (left) — it shows every file/folder name on disk.  "
+            "<b>②  →</b> copies those names to the right.  "
+            "<b>③ Edit</b> the right side — type the desired new name on each line.  "
+            "<b>④ ✓ Apply</b> renames each item on disk:  "
+            "the item whose current name is on <i>Left line N</i> "
+            "is permanently renamed to <i>Right line N</i>.  "
+            "A confirmation dialog appears before any file is touched."
+        )
+        wf.setStyleSheet(self.LS+"font-size:10px;")
+        wf.setWordWrap(True); wf.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        wf_row.addWidget(wf)
 
-        # Legend for line compare
+        # Legend — centred
         leg2_row = QHBoxLayout(); leg2_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         leg2_row.setSpacing(12); lay.addLayout(leg2_row)
-        leg2_lbl = QLabel("Compare colours:")
+        leg2_lbl = QLabel("≡? Compare line colours:")
         leg2_lbl.setStyleSheet(self.LS+"font-weight:600;font-size:10px;")
         leg2_row.addWidget(leg2_lbl)
         for color, desc in [
-            ("#b8f0b8","Same name on both lines"),
-            ("#f0b8b8","Different names on same line"),
-            ("#f0f0b0","Line exists on one side only"),
+            ("#b8f0b8", "Same name on both lines (no rename needed)"),
+            ("#f0b8b8", "Different names — will be renamed"),
+            ("#f0f0b0", "Line exists on one side only"),
         ]:
             leg2_row.addWidget(self._legend_item(color, desc))
-        leg2_row.addStretch()
 
         outer.addWidget(content, stretch=1)
 
@@ -692,48 +701,37 @@ class FolderStructureApp(QMainWindow):
         lay.setContentsMargins(10,8,10,6); lay.setSpacing(5)
 
         hint = QLabel(
-            "Scan a folder below (or it auto-loads from Tab 1 on first use).  "
-            "Click Generate Tree to create a ├── └── │ diagram with description placeholders.  "
-            "Export saves directory_structure_explained.md into the source folder.")
+            "Scan a folder (auto-loaded from Tab 1 on first use, or scan independently below).  "
+            "Click Generate Tree to build a ├── └── │ diagram with  # ← description  placeholders.  "
+            "Export saves  directory_structure_explained.md  into the source folder.")
         hint.setStyleSheet(self.LS); hint.setWordWrap(True)
         lay.addWidget(hint)
 
-        # Source path row — Tab 3 independent
-        src_row = QHBoxLayout(); src_row.setSpacing(4); lay.addLayout(src_row)
-        sl = QLabel("Source:"); sl.setFixedWidth(52); sl.setStyleSheet(self.LS)
-        src_row.addWidget(sl)
-        self.t3_path_edit = QLineEdit()
-        self.t3_path_edit.setPlaceholderText("Select a folder to build tree from …")
-        self.t3_path_edit.setFixedHeight(24); src_row.addWidget(self.t3_path_edit)
-        b3br = QPushButton("Browse"); b3br.setFixedWidth(68); b3br.setFixedHeight(24)
-        b3br.clicked.connect(self._browse_t3); src_row.addWidget(b3br)
-        b3sc = QPushButton("Scan"); b3sc.setFixedHeight(24)
-        b3sc.setToolTip("Scan the folder and load its structure into the left preview.")
-        b3sc.clicked.connect(self._scan_t3); src_row.addWidget(b3sc)
-
-        # Root name row
+        # Root name row (above the panels so it's always visible)
         rn_row = QHBoxLayout(); rn_row.setSpacing(4); lay.addLayout(rn_row)
-        rnl = QLabel("Root name:"); rnl.setFixedWidth(72); rnl.setStyleSheet(self.LS)
+        rnl = QLabel("Root name:"); rnl.setFixedWidth(80); rnl.setStyleSheet(self.LS)
         rn_row.addWidget(rnl)
         self.tree_root_edit = QLineEdit()
         self.tree_root_edit.setPlaceholderText(
-            "Leave empty to use the folder name, or type a custom project name …")
+            "Leave empty to use the folder name, or type a custom root/project name …")
         self.tree_root_edit.setFixedHeight(24); rn_row.addWidget(self.tree_root_edit)
 
         # Two panels
         panels3 = QHBoxLayout(); panels3.setSpacing(12)
         lay.addLayout(panels3, stretch=1)
 
-        left3 = QVBoxLayout(); left3.setSpacing(4)
-        panels3.addLayout(left3, stretch=1)
-        ll3 = QLabel("Scanned Structure  (source — edit to customise before generating)")
-        ll3.setStyleSheet("font-weight:bold;font-size:11px;"); left3.addWidget(ll3)
-        self.t3_left_preview = LineNumberedEditor()
-        left3.addWidget(self.t3_left_preview, stretch=1)
+        # Left panel — full independent scan controls (identical to Tab 1 / Tab 2)
+        self._build_preview_panel(
+            panels3,
+            "Source Structure  (scan a folder here — edit to customise before generating)",
+            "t3_left",
+            self._scan_t3, self._export_t3_left,
+            self._import_t3_left, self._browse_t3,
+            read_only=False)
 
         right3 = QVBoxLayout(); right3.setSpacing(4)
         panels3.addLayout(right3, stretch=1)
-        rl3 = QLabel("Generated Tree Diagram  (with # ← add description here placeholders — editable)")
+        rl3 = QLabel("Generated Tree Diagram  (editable — # ← add description here)")
         rl3.setStyleSheet("font-weight:bold;font-size:11px;"); right3.addWidget(rl3)
         self.tree_output = QTextEdit()
         self.tree_output.setReadOnly(False)
@@ -829,19 +827,37 @@ class FolderStructureApp(QMainWindow):
     # ── Tab 3 independent scan/browse ──────────────────────────────────────
 
     def _browse_t3(self):
-        f = QFileDialog.getExistingDirectory(self,"Select Folder",self.t3_path_edit.text())
-        if f: self.t3_path_edit.setText(f)
+        f = QFileDialog.getExistingDirectory(self,"Select Folder",self.t3_left_path_edit.text())
+        if f: self.t3_left_path_edit.setText(f)
 
     def _scan_t3(self):
-        path = self.t3_path_edit.text().strip()
+        path = self.t3_left_path_edit.text().strip()
         if not os.path.isdir(path):
             QMessageBox.warning(self,"Error","Source path is not a valid folder."); return
+        rec  = self.t3_left_radio_recursive.isChecked()
+        incf = self.t3_left_cb_folders.isChecked()
+        inci = self.t3_left_cb_files.isChecked()
         try:
-            lines, _ = get_folder_structure_with_paths(
-                path, recursive=True, include_folders=True, include_files=False)
+            lines, _ = get_folder_structure_with_paths(path, rec, incf, inci)
             self.t3_left_preview.setPlainText("\n".join(lines))
         except Exception as e:
             QMessageBox.critical(self,"Error",f"Cannot read structure:\n{e}")
+
+    def _export_t3_left(self):
+        path = self.t3_left_path_edit.text().strip()
+        if not os.path.isdir(path):
+            QMessageBox.warning(self,"Error","Invalid source folder."); return
+        self._safe_export(path, self.t3_left_preview.toPlainText().rstrip())
+
+    def _import_t3_left(self):
+        txt,_=QFileDialog.getOpenFileName(self,"Select .txt","","Text files (*.txt);;All files (*.*)")
+        if not txt: return
+        try:
+            with open(txt,encoding="utf-8") as f:
+                lines=[l.rstrip() for l in f if l.strip() and not l.strip().startswith('#')]
+            self.t3_left_preview.setPlainText("\n".join(lines))
+        except Exception as e:
+            QMessageBox.critical(self,"Error",f"Cannot load file:\n{e}")
 
     # ── Content propagation (Tab 1 → Tab 2 & 3, first load only) ──────────
 
@@ -872,7 +888,18 @@ class FolderStructureApp(QMainWindow):
         # First-load propagation to Tab 3
         if not self._tab3_initialized and text.strip():
             self.t3_left_preview.setPlainText(text)
-            self.t3_path_edit.setText(self.left_path_edit.text())
+            self.t3_left_path_edit.setText(self.left_path_edit.text())
+            # Mirror scan options
+            if self.left_radio_recursive.isChecked():
+                self.t3_left_radio_recursive.setChecked(True)
+            else:
+                self.t3_left_radio_only_root.setChecked(True)
+            self.t3_left_cb_folders.blockSignals(True)
+            self.t3_left_cb_files.blockSignals(True)
+            self.t3_left_cb_folders.setChecked(self.left_cb_folders.isChecked())
+            self.t3_left_cb_files.setChecked(self.left_cb_files.isChecked())
+            self.t3_left_cb_folders.blockSignals(False)
+            self.t3_left_cb_files.blockSignals(False)
             self._tab3_initialized = True
 
     def _on_right_changed(self):
@@ -1337,7 +1364,7 @@ class FolderStructureApp(QMainWindow):
         lines = [l for l in text.splitlines() if l.strip()]
         root_name = self.tree_root_edit.text().strip()
         if not root_name:
-            src = self.t3_path_edit.text().strip()
+            src = self.t3_left_path_edit.text().strip()
             root_name = os.path.basename(src) if src else "project"
         self.tree_output.setPlainText(build_tree_diagram(lines, root_name))
 
@@ -1346,10 +1373,10 @@ class FolderStructureApp(QMainWindow):
         if not tree_text:
             QMessageBox.warning(self,"Export Tree",
                 "The tree diagram is empty.\nClick 'Generate Tree' first."); return
-        src = self.t3_path_edit.text().strip()
+        src = self.t3_left_path_edit.text().strip()
         if not src or not os.path.isdir(src):
             QMessageBox.warning(self,"Export Tree",
-                "No valid source folder set.\nUse the Source field and Scan above."); return
+                "No valid source folder set.\nPlease scan a folder first."); return
         out_path = os.path.join(src, "directory_structure_explained.md")
         if os.path.exists(out_path):
             msg=QMessageBox(self); msg.setWindowTitle("File Already Exists")
