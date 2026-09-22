@@ -299,10 +299,11 @@ class FolderStructureApp(QMainWindow):
         super().__init__()
         self.setWindowTitle("Structify — Folder Structure Tool")
         screen = QApplication.primaryScreen().availableGeometry()
-        w = int(screen.width() * 0.72); h = screen.height()
+        w = int(screen.width() * 0.60); h = int(screen.height() * 0.85)
         self.resize(w, h)
-        self.setMinimumSize(QSize(960, 680))
-        self.move(screen.x() + (screen.width()-w)//2, screen.y())
+        self.setMinimumSize(QSize(880, 620))
+        self.move(screen.x() + (screen.width()-w)//2,
+                  screen.y() + (screen.height()-h)//2)
         if 'Fusion' in QStyleFactory.keys():
             QApplication.setStyle('Fusion')
 
@@ -539,48 +540,133 @@ class FolderStructureApp(QMainWindow):
         hint.setStyleSheet(self.LS); hint.setWordWrap(True)
         lay.addWidget(hint)
 
-        # Two panels — tab2 has its OWN independent scan controls
-        panels = QHBoxLayout(); panels.setSpacing(12)
+        # Three-column layout: Left panel | Center buttons | Right panel
+        panels = QHBoxLayout(); panels.setSpacing(8)
         lay.addLayout(panels, stretch=1)
 
         # Left panel — independent scan in tab2
         self._build_preview_panel(
             panels,
-            "Current Names  (left = what's on disk now)",
+            "Current Names  (left = names that exist on disk right now)",
             "t2_left",
             self._scan_t2_left, self._export_t2_left,
             self._import_t2_left, self._browse_t2_left,
             read_only=False)
 
-        # Right panel — manual input only
+        # ── Center column: 3 vertically centered action buttons ──
+        center_col = QVBoxLayout()
+        center_col.setSpacing(10)
+        center_col.setContentsMargins(4, 0, 4, 0)
+        center_col.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        panels.addLayout(center_col)
+
+        center_col.addStretch()
+
+        # Button 1 — Copy Left → Right
+        btn_copy = QPushButton("→")
+        btn_copy.setFixedSize(48, 48)
+        btn_copy.setToolTip(
+            "Copy the Left preview into the Right preview.\n"
+            "Edit the Right preview to type the desired new names.")
+        btn_copy.setStyleSheet("""
+            QPushButton {
+                background-color: #4a90c4; color: white;
+                font-size: 20px; font-weight: bold;
+                border-radius: 24px;
+            }
+            QPushButton:hover  { background-color: #5aa0d4; }
+            QPushButton:pressed{ background-color: #3a80b4; }
+        """)
+        btn_copy.clicked.connect(self._copy_left_to_right_t2)
+        center_col.addWidget(btn_copy, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        copy_lbl = QLabel("Copy")
+        copy_lbl.setStyleSheet(self.LS+"font-size:10px;font-weight:600;")
+        copy_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        center_col.addWidget(copy_lbl)
+
+        center_col.addSpacing(12)
+
+        # Button 2 — Compare line by line
+        self.btn_compare_names = QPushButton("≡?")
+        self.btn_compare_names.setFixedSize(48, 48)
+        self.btn_compare_names.setToolTip(
+            "Compare left and right names line by line.\n"
+            "Green = same, Red = different, Yellow = only on one side.")
+        self.btn_compare_names.setStyleSheet("""
+            QPushButton {
+                background-color: #707070; color: white;
+                font-size: 16px; font-weight: bold;
+                border-radius: 24px;
+            }
+            QPushButton:hover  { background-color: #888888; }
+            QPushButton:pressed{ background-color: #555555; }
+        """)
+        self.btn_compare_names.clicked.connect(self.toggle_line_compare)
+        center_col.addWidget(self.btn_compare_names, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        self.cmp_lbl = QLabel("Compare")
+        self.cmp_lbl.setStyleSheet(self.LS+"font-size:10px;font-weight:600;")
+        self.cmp_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        center_col.addWidget(self.cmp_lbl)
+
+        center_col.addSpacing(12)
+
+        # Button 3 — Apply rename
+        btn_apply = QPushButton("✓")
+        btn_apply.setFixedSize(48, 48)
+        btn_apply.setToolTip(
+            "Apply Right Names to Left Source Folder.\n"
+            "Each item on disk (named by Left line N) is renamed to Right line N.\n"
+            "A confirmation dialog is shown before any changes are made.")
+        btn_apply.setStyleSheet("""
+            QPushButton {
+                background-color: #e65c00; color: white;
+                font-size: 20px; font-weight: bold;
+                border-radius: 24px;
+            }
+            QPushButton:hover  { background-color: #ff6a00; }
+            QPushButton:pressed{ background-color: #c24f00; }
+        """)
+        btn_apply.clicked.connect(self.batch_rename)
+        center_col.addWidget(btn_apply, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        apply_lbl = QLabel("Apply")
+        apply_lbl.setStyleSheet(self.LS+"font-size:10px;font-weight:600;color:#ff8040;")
+        apply_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        center_col.addWidget(apply_lbl)
+
+        center_col.addStretch()
+
+        # Right panel — manual input
         right_col = QVBoxLayout(); right_col.setSpacing(4)
         panels.addLayout(right_col, stretch=1)
-        rl = QLabel("New Names  (right = type new names here, one per line)")
+        rl = QLabel("New Names  (right = desired names — edit here)")
         rl.setStyleSheet("font-weight:bold;font-size:12px;"); right_col.addWidget(rl)
-        # Spacer matching the path/options/buttons rows on the left
-        spacer_h = QWidget(); spacer_h.setFixedHeight(24+4+24+4+24+4)  # 3 rows
+        # Spacer matching path/options/buttons rows height on the left
+        spacer_h = QWidget(); spacer_h.setFixedHeight(80)
         right_col.addWidget(spacer_h)
-        rp_lbl = QLabel("New Names Preview (editable)")
+        rp_lbl = QLabel("New Names Preview (editable — one name per line)")
         rp_lbl.setStyleSheet("font-weight:bold;font-size:11px;"); right_col.addWidget(rp_lbl)
         self.tab2_right_editor = LineNumberedEditor()
         right_col.addWidget(self.tab2_right_editor, stretch=1)
 
-        # Bottom controls
+        # Bottom info + legend
         lay.addWidget(self._hr())
 
         info_row = QHBoxLayout(); info_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addLayout(info_row)
         info = QLabel(
-            "Names matched strictly by line number:  line 1 left → renamed to line 1 right,  "
-            "line 2 left → renamed to line 2 right,  and so on.")
+            "Line N on the left gets renamed to Line N on the right.  "
+            "The → button copies left names to right so you only edit what needs changing.")
         info.setStyleSheet(self.LS+"font-size:10px;"); info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info_row.addWidget(info)
 
         # Legend for line compare
         leg2_row = QHBoxLayout(); leg2_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        leg2_row.setSpacing(16); lay.addLayout(leg2_row)
-        leg2_lbl = QLabel("Line comparison legend:")
-        leg2_lbl.setStyleSheet(self.LS+"font-weight:600;")
+        leg2_row.setSpacing(12); lay.addLayout(leg2_row)
+        leg2_lbl = QLabel("Compare colours:")
+        leg2_lbl.setStyleSheet(self.LS+"font-weight:600;font-size:10px;")
         leg2_row.addWidget(leg2_lbl)
         for color, desc in [
             ("#b8f0b8","Same name on both lines"),
@@ -589,28 +675,6 @@ class FolderStructureApp(QMainWindow):
         ]:
             leg2_row.addWidget(self._legend_item(color, desc))
         leg2_row.addStretch()
-
-        # Compare + Apply row
-        btn_row2 = QHBoxLayout(); btn_row2.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        btn_row2.setSpacing(16); lay.addLayout(btn_row2)
-
-        self.btn_compare_names = self._make_btn(
-            "Compare Left and Right Names Line by Line",
-            "QPushButton{background-color:#707070;color:white;font-weight:bold;"
-            "font-size:12px;border-radius:5px;min-width:320px;padding:3px 12px;}"
-            "QPushButton:hover{background-color:#888888;}"
-            "QPushButton:pressed{background-color:#555555;}", 28,
-            "Highlight each line: green=same, red=different, yellow=one side only.")
-        self.btn_compare_names.clicked.connect(self.toggle_line_compare)
-        btn_row2.addWidget(self.btn_compare_names)
-
-        btn_rn = self._make_btn(
-            "⟳  Apply Right Names → Left Source Folder",
-            self._orange_btn(), 28,
-            "Rename every item in the left source folder using the corresponding "
-            "line from the right preview. Uses safe two-phase rename with rollback.")
-        btn_rn.clicked.connect(self.batch_rename)
-        btn_row2.addWidget(btn_rn)
 
         outer.addWidget(content, stretch=1)
 
@@ -710,6 +774,20 @@ class FolderStructureApp(QMainWindow):
         btn3_row.addWidget(btn_exp)
 
         outer.addWidget(content, stretch=1)
+
+    # ── Tab 2 actions ────────────────────────────────────────────────────────
+
+    def _copy_left_to_right_t2(self):
+        """Copy the current Left preview into the Right editor so the user
+        can see all names and edit only the ones that need changing."""
+        text = self.t2_left_preview.toPlainText().strip()
+        if not text:
+            QMessageBox.information(
+                self, "Copy Left → Right",
+                "The Left preview is empty.\n"
+                "Please scan a folder first using the Scan button above.")
+            return
+        self.tab2_right_editor.setPlainText(text)
 
     # ── Tab 2 independent scan/browse/export/import ──────────────────────────
 
@@ -1006,12 +1084,18 @@ class FolderStructureApp(QMainWindow):
                 "and type the new names into the Right preview first."); return
         self._line_compare_active = not self._line_compare_active
         if self._line_compare_active:
-            self.btn_compare_names.setText("Compare Left and Right Names Line by Line  ✔  ON")
-            self.btn_compare_names.setStyleSheet(
-                "QPushButton{background-color:#4CAF50;color:white;font-weight:bold;"
-                "font-size:12px;border-radius:5px;min-width:320px;padding:3px 12px;}"
-                "QPushButton:hover{background-color:#66BB6A;}"
-                "QPushButton:pressed{background-color:#388E3C;}")
+            self.btn_compare_names.setText("≡✔")
+            self.cmp_lbl.setText("Compare ON")
+            self.cmp_lbl.setStyleSheet(self.LS+"font-size:10px;font-weight:600;color:#66BB6A;")
+            self.btn_compare_names.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50; color: white;
+                    font-size: 16px; font-weight: bold;
+                    border-radius: 24px;
+                }
+                QPushButton:hover  { background-color: #66BB6A; }
+                QPushButton:pressed{ background-color: #388E3C; }
+            """)
             if not hasattr(self,'_compare_timer'):
                 self._compare_timer = QTimer(self)
                 self._compare_timer.setSingleShot(True); self._compare_timer.setInterval(150)
@@ -1020,12 +1104,18 @@ class FolderStructureApp(QMainWindow):
                 self.tab2_right_editor.text_changed.connect(self._schedule_color_update)
             self._apply_tab2_line_colors()
         else:
-            self.btn_compare_names.setText("Compare Left and Right Names Line by Line")
-            self.btn_compare_names.setStyleSheet(
-                "QPushButton{background-color:#707070;color:white;font-weight:bold;"
-                "font-size:12px;border-radius:5px;min-width:320px;padding:3px 12px;}"
-                "QPushButton:hover{background-color:#888888;}"
-                "QPushButton:pressed{background-color:#555555;}")
+            self.btn_compare_names.setText("≡?")
+            self.cmp_lbl.setText("Compare")
+            self.cmp_lbl.setStyleSheet(self.LS+"font-size:10px;font-weight:600;")
+            self.btn_compare_names.setStyleSheet("""
+                QPushButton {
+                    background-color: #707070; color: white;
+                    font-size: 16px; font-weight: bold;
+                    border-radius: 24px;
+                }
+                QPushButton:hover  { background-color: #888888; }
+                QPushButton:pressed{ background-color: #555555; }
+            """)
             if hasattr(self,'_compare_timer'): self._compare_timer.stop()
             self._clear_tab2_line_colors()
 
