@@ -1,8 +1,8 @@
 {
-  "left": "C:/Users/Sicaja/Desktop/New folder",
-  "right": "C:/Users/Sicaja/Desktop/New folder",
-  "left_recursive": false,
-  "left_folders": false,
+  "left": "C:/Users/Sicaja/Desktop/test2",
+  "right": "",
+  "left_recursive": true,
+  "left_folders": true,
   "left_files": true,
   "right_recursive": false,
   "right_folders": true,
