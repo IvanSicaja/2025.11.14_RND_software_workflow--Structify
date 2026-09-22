@@ -55,8 +55,19 @@ def get_folder_structure_with_paths(root_path, recursive=True,
 # ── Tree diagram generator ───────────────────────────────────────────────────
 
 def build_tree_diagram(lines, root_name="project"):
-    """Convert indented name list into a │ ├── └── tree with # comment placeholders."""
-    # Parse into (depth, name) pairs
+    """
+    Convert indented name list into a │ ├── └── tree with spacing that
+    exactly matches the reference markdown:
+
+    • Root line: root_name/
+    • Before the first root-level item: a bare │ separator line (like lines 2-3)
+    • After every folder-with-children: a │ separator at the child's indent level
+    • After every root-level item (depth-0): a bare │ line (the breathing space
+      between top-level entries seen throughout the reference)
+    • Files (contain '.' and don't start with '.') get no trailing slash and
+      no inner separator.
+    • Every item gets a # ← add description here placeholder aligned to col 52.
+    """
     items = []
     for line in lines:
         if not line.strip():
@@ -69,60 +80,76 @@ def build_tree_diagram(lines, root_name="project"):
     if not items:
         return ""
 
-    result = [f"{root_name}/"]
+    def is_file(name):
+        return '.' in name and not name.startswith('.')
 
-    def is_folder(name):
-        return '.' not in name or name.startswith('.')
+    def has_children(i):
+        return i + 1 < len(items) and items[i + 1][0] > items[i][0]
 
-    def last_child_at_depth(idx, depth):
-        for j in range(idx + 1, len(items)):
+    def is_last_at_depth(i):
+        depth = items[i][0]
+        for j in range(i + 1, len(items)):
             if items[j][0] == depth:
                 return False
             if items[j][0] < depth:
                 break
         return True
 
-    for i, (depth, name) in enumerate(items):
-        # Build vertical bar prefix
-        prefix_parts = []
-        for d in range(depth):
-            # Check if parent at this depth still has siblings below
-            has_sibling = False
+    def bar_prefix(i, up_to_depth):
+        """Return the vertical-bar prefix string for depth levels 0..up_to_depth-1."""
+        parts = []
+        for d in range(up_to_depth):
+            # Does depth d still have a sibling after position i?
+            still_open = False
             for j in range(i + 1, len(items)):
                 if items[j][0] == d:
-                    has_sibling = True
-                    break
+                    still_open = True; break
                 if items[j][0] < d:
                     break
-            prefix_parts.append("│   " if has_sibling else "    ")
+            parts.append("│   " if still_open else "    ")
+        return "".join(parts)
 
-        is_last = last_child_at_depth(i, depth)
+    def separator_line(i, depth):
+        """A pure │ line at the given depth (no connector, no name)."""
+        return bar_prefix(i, depth) + "│"
+
+    result = [f"{root_name}/"]
+
+    # Opening │ lines before first item (matches lines 2-3 of reference)
+    result.append("│")
+    result.append("│")
+
+    for i, (depth, name) in enumerate(items):
+        prefix   = bar_prefix(i, depth)
+        is_last  = is_last_at_depth(i)
         connector = "└── " if is_last else "├── "
-        prefix = "".join(prefix_parts) + connector
+        folder    = not is_file(name)
+        hc        = has_children(i)
+        display   = name + ("/" if folder and hc else "")
+        full_line = prefix + connector + display
+        pad       = max(1, 52 - len(full_line))
+        result.append(full_line + " " * pad + "# ← add description here")
 
-        # Add trailing slash for folders (items that have children)
-        has_children = (i + 1 < len(items) and items[i + 1][0] > depth)
-        display_name = name + ("/" if has_children and is_folder(name) else "")
+        if folder and hc:
+            # Inner │ separator line between folder header and its first child.
+            # Depth of the separator = depth of the folder (shows the vertical bar
+            # at that folder's level), matching the reference format:
+            #   ├── assets/
+            #   │   │          ← this line (depth=1 shown as "│   │")
+            #   │   ├── 01_media/
+            child_depth = items[i + 1][0]
+            result.append(separator_line(i, child_depth))
 
-        # Comment padding — align to column 52
-        line_so_far = prefix + display_name
-        pad = max(1, 52 - len(line_so_far))
-        comment = " " * pad + "# ← add description here"
+        # Breathing │ line after each root-level entry's entire subtree.
+        # Emitted when the NEXT item is at depth 0 (new top-level entry),
+        # but NOT after the very last item in the whole tree.
+        next_idx = i + 1
+        is_final = (next_idx >= len(items))
+        next_is_root = (not is_final and items[next_idx][0] == 0)
 
-        result.append(line_so_far + comment)
-
-        # Add │ separator line after folders that have children
-        if has_children:
-            next_depth = items[i + 1][0]
-            bar_parts = []
-            for d in range(next_depth):
-                has_s = False
-                for j in range(i + 1, len(items)):
-                    if items[j][0] == d:
-                        has_s = True; break
-                    if items[j][0] < d: break
-                bar_parts.append("│   " if has_s else "    ")
-            result.append("".join(bar_parts) + "│")
+        if not is_final and next_is_root:
+            # We're about to hit a new root-level sibling — emit spacing │
+            result.append("│")
 
     return "\n".join(result)
 
@@ -405,7 +432,7 @@ class FolderStructureApp(QMainWindow):
         row_cs = QHBoxLayout(); row_cs.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addLayout(row_cs)
         btn_cs = QPushButton("Compare Structures  (level-by-level, order-insensitive)")
-        btn_cs.setStyleSheet(self._green_btn_style()); btn_cs.setFixedHeight(32)
+        btn_cs.setStyleSheet(self._green_btn_style()); btn_cs.setFixedHeight(28)
         btn_cs.setToolTip("Opens a popup showing which names exist in one structure but not the other.")
         btn_cs.clicked.connect(self.compare_previews)
         row_cs.addWidget(btn_cs)
@@ -423,15 +450,13 @@ class FolderStructureApp(QMainWindow):
     def _build_tab2(self):
         self.tab2 = QWidget()
         lay = QVBoxLayout(self.tab2)
-        lay.setContentsMargins(16,12,16,10); lay.setSpacing(8)
+        lay.setContentsMargins(12,8,12,6); lay.setSpacing(5)
 
         hint = QLabel(
-            "LEFT preview shows the current names on disk (scanned in Tab 1).  "
-            "Type or paste the desired new names into the RIGHT preview — one name per line "
-            "in the same order.  "
-            "Line N on the left gets renamed to Line N on the right.  "
-            "Click  ⟳ Apply  to rename on disk.")
-        hint.setStyleSheet(self.LABEL_S); hint.setWordWrap(True)
+            "LEFT = current names on disk (auto-loaded from Tab 1 scan).  "
+            "RIGHT = type the desired new names here, one per line in the same order.  "
+            "Line N left → renamed to Line N right.  Click ⟳ Apply to rename on disk.")
+        hint.setStyleSheet(self.LABEL_S + "font-size:11px;"); hint.setWordWrap(True)
         lay.addWidget(hint)
 
         # Two panels (shared previews — read-only mirrors for tab2)
@@ -460,11 +485,10 @@ class FolderStructureApp(QMainWindow):
         info_row = QHBoxLayout(); info_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addLayout(info_row)
         for txt in [
-            "Left preview = current names as they exist on disk  |  "
-            "Right preview = the desired final names  |  "
-            "Names matched strictly line-by-line (line 1 ↔ line 1, line 2 ↔ line 2, …)"
+            "Left = current names on disk  |  Right = desired new names  |  "
+            "Matched strictly by line number (line 1 ↔ line 1, …)"
         ]:
-            lbl = QLabel(txt); lbl.setStyleSheet(self.LABEL_S)
+            lbl = QLabel(txt); lbl.setStyleSheet(self.LABEL_S + "font-size:11px;")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             info_row.addWidget(lbl)
 
@@ -478,7 +502,7 @@ class FolderStructureApp(QMainWindow):
             QPushButton:hover  { background-color:#888888; }
             QPushButton:pressed{ background-color:#555555; }
         """)
-        self.btn_compare_names.setFixedHeight(32); self.btn_compare_names.setFixedWidth(520)
+        self.btn_compare_names.setFixedHeight(28); self.btn_compare_names.setFixedWidth(520)
         self.btn_compare_names.setToolTip(
             "Highlights lines: green=same, red=different, yellow=only on one side.")
         self.btn_compare_names.clicked.connect(self.toggle_line_compare)
@@ -502,7 +526,7 @@ class FolderStructureApp(QMainWindow):
             QPushButton:hover  { background-color:#ff6a00; }
             QPushButton:pressed{ background-color:#c24f00; }
         """)
-        btn_rn.setFixedHeight(32)
+        btn_rn.setFixedHeight(28)
         btn_rn.setToolTip(
             "Renames every item in the Left source folder using the corresponding line "
             "from the Right preview. Uses a safe two-phase rename with automatic rollback.")
@@ -515,15 +539,13 @@ class FolderStructureApp(QMainWindow):
     def _build_tab3(self):
         self.tab3 = QWidget()
         lay = QVBoxLayout(self.tab3)
-        lay.setContentsMargins(16,12,16,10); lay.setSpacing(8)
+        lay.setContentsMargins(12,8,12,6); lay.setSpacing(5)
 
         hint = QLabel(
-            "Generate a formatted folder-tree diagram with  ├──  └──  │  connectors "
-            "and a  # ← add description here  placeholder for every item.  "
-            "Scan a folder in Tab 1, then click  Generate Tree  below.  "
-            "Click  Export TXT  to save the tree as a  directory_structure_explained.md  "
-            "file inside the scanned folder.")
-        hint.setStyleSheet(self.LABEL_S); hint.setWordWrap(True)
+            "Generate a ├── └── │ tree diagram with # ← add description here placeholders.  "
+            "Scan a folder in Tab 1, then click Generate Tree.  "
+            "Export saves directory_structure_explained.md into the scanned folder.")
+        hint.setStyleSheet(self.LABEL_S + "font-size:11px;"); hint.setWordWrap(True)
         lay.addWidget(hint)
 
         # Source folder row
@@ -593,13 +615,13 @@ class FolderStructureApp(QMainWindow):
         btn_row.setSpacing(20); lay.addLayout(btn_row)
 
         btn_gen = QPushButton("▶  Generate Tree from Left Structure")
-        btn_gen.setStyleSheet(self._green_btn_style()); btn_gen.setFixedHeight(34)
+        btn_gen.setStyleSheet(self._green_btn_style()); btn_gen.setFixedHeight(28)
         btn_gen.setToolTip("Build the │ ├── └── tree from the scanned structure.")
         btn_gen.clicked.connect(self._generate_tree)
         btn_row.addWidget(btn_gen)
 
         btn_exp = QPushButton("💾  Export Tree as directory_structure_explained.md")
-        btn_exp.setStyleSheet(self._blue_btn_style()); btn_exp.setFixedHeight(34)
+        btn_exp.setStyleSheet(self._blue_btn_style()); btn_exp.setFixedHeight(28)
         btn_exp.setToolTip(
             "Save the tree diagram as 'directory_structure_explained.md' "
             "inside the scanned source folder.")
@@ -908,9 +930,13 @@ class FolderStructureApp(QMainWindow):
             else: self._clear_line_colors()
 
     def toggle_line_compare(self):
-        if not self._line_compare_active and not self._both_previews_have_content():
+        # Tab 2: need content in both tab2 mirrors
+        left_has  = bool(self.tab2_left_mirror.toPlainText().strip())
+        right_has = bool(self.tab2_right_editor.toPlainText().strip())
+        if not self._line_compare_active and not (left_has and right_has):
             QMessageBox.information(self,"Compare Names",
-                "Please scan or load a structure into both previews first."); return
+                "Please load a structure into the Left preview (scan in Tab 1)\n"
+                "and type the new names into the Right preview first."); return
         self._line_compare_active = not self._line_compare_active
         if self._line_compare_active:
             self.btn_compare_names.setText("Compare Left and Right Names Line by Line  ✔  ON")
@@ -922,10 +948,10 @@ class FolderStructureApp(QMainWindow):
             if not hasattr(self,'_compare_timer'):
                 self._compare_timer = QTimer(self)
                 self._compare_timer.setSingleShot(True); self._compare_timer.setInterval(150)
-                self._compare_timer.timeout.connect(self._apply_line_colors)
-                self.left_preview.text_changed.connect(self._schedule_color_update)
-                self.right_preview.text_changed.connect(self._schedule_color_update)
-            self._apply_line_colors()
+                self._compare_timer.timeout.connect(self._apply_tab2_line_colors)
+                self.tab2_left_mirror.text_changed.connect(self._schedule_color_update)
+                self.tab2_right_editor.text_changed.connect(self._schedule_color_update)
+            self._apply_tab2_line_colors()
         else:
             self.btn_compare_names.setText("Compare Left and Right Names Line by Line")
             self.btn_compare_names.setStyleSheet("""
@@ -934,11 +960,54 @@ class FolderStructureApp(QMainWindow):
                 QPushButton:hover{background-color:#888888;}
                 QPushButton:pressed{background-color:#555555;}""")
             if hasattr(self,'_compare_timer'): self._compare_timer.stop()
-            self._clear_line_colors()
+            self._clear_tab2_line_colors()
 
     def _schedule_color_update(self):
         if self._line_compare_active and not self._coloring_in_progress:
             if hasattr(self,'_compare_timer'): self._compare_timer.start()
+
+    def _clear_tab2_line_colors(self):
+        self._coloring_in_progress = True
+        try:
+            for pv in (self.tab2_left_mirror, self.tab2_right_editor):
+                doc = pv.editor.document(); doc.blockSignals(True)
+                try:
+                    cur = QTextCursor(doc); cur.beginEditBlock()
+                    cur.select(QTextCursor.SelectionType.Document)
+                    fmt = QTextCharFormat(); fmt.setBackground(QColor("white"))
+                    cur.setCharFormat(fmt); cur.clearSelection(); cur.endEditBlock()
+                finally: doc.blockSignals(False)
+                pv._update_gutter_width(); pv._gutter.update()
+        finally: self._coloring_in_progress = False
+
+    def _apply_tab2_line_colors(self):
+        """Color tab2_left_mirror and tab2_right_editor by line-index comparison."""
+        if self._coloring_in_progress or not self._line_compare_active: return
+        self._coloring_in_progress = True
+        try:
+            EQ = QColor("#b8f0b8"); DF = QColor("#f0b8b8"); ON = QColor("#f0f0b0")
+            ll = self.tab2_left_mirror.editor.document().toPlainText().splitlines()
+            rl = self.tab2_right_editor.editor.document().toPlainText().splitlines()
+            def _col(pv, lines, partner):
+                doc = pv.editor.document(); doc.blockSignals(True)
+                try:
+                    cur = QTextCursor(doc); cur.beginEditBlock()
+                    for i in range(doc.blockCount()):
+                        bl = doc.findBlockByNumber(i)
+                        if not bl.isValid(): break
+                        bc = QTextCursor(bl)
+                        bc.select(QTextCursor.SelectionType.BlockUnderCursor)
+                        fmt = QTextCharFormat()
+                        if i >= len(partner):          fmt.setBackground(ON)
+                        elif lines[i].strip() == partner[i].strip(): fmt.setBackground(EQ)
+                        else:                           fmt.setBackground(DF)
+                        bc.setCharFormat(fmt)
+                    cur.endEditBlock()
+                finally: doc.blockSignals(False)
+                pv._update_gutter_width(); pv._gutter.update()
+            _col(self.tab2_left_mirror,  ll, rl)
+            _col(self.tab2_right_editor, rl, ll)
+        finally: self._coloring_in_progress = False
 
     def _clear_line_colors(self):
         self._coloring_in_progress = True
