@@ -822,15 +822,6 @@ class FolderStructureApp(QMainWindow):
             "Export saves  directory_structure_explained.md  into the source folder.")
         hint.setStyleSheet(self.LS); hint.setWordWrap(True); lay.addWidget(hint)
 
-        # Root name row
-        rn_row = QHBoxLayout(); rn_row.setSpacing(4); lay.addLayout(rn_row)
-        rnl = QLabel("Root name:"); rnl.setFixedWidth(80); rnl.setStyleSheet(self.LS)
-        rn_row.addWidget(rnl)
-        self.tree_root_edit = QLineEdit()
-        self.tree_root_edit.setPlaceholderText(
-            "Leave empty to use the folder name, or type a custom root/project name …")
-        self.tree_root_edit.setFixedHeight(24); rn_row.addWidget(self.tree_root_edit)
-
         # Two panels
         panels3 = QHBoxLayout(); panels3.setSpacing(12)
         lay.addLayout(panels3, stretch=1)
@@ -1314,12 +1305,10 @@ class FolderStructureApp(QMainWindow):
             QMessageBox.warning(self,"Generate Tree",
                 "The structure preview is empty.\n"
                 "Please scan a folder first."); return
-        lines=[l for l in text.splitlines() if l.strip()]
-        root_name=self.tree_root_edit.text().strip()
-        if not root_name:
-            src=self.t3_left_path_edit.text().strip()
-            root_name=os.path.basename(src) if src else "project"
-        self.tree_output.setPlainText(build_tree_diagram(lines,root_name))
+        lines = [l for l in text.splitlines() if l.strip()]
+        src = self.t3_left_path_edit.text().strip()
+        root_name = os.path.basename(src) if src else "project"
+        self.tree_output.setPlainText(build_tree_diagram(lines, root_name))
 
     def _export_tree(self):
         tree=self.tree_output.toPlainText().strip()
