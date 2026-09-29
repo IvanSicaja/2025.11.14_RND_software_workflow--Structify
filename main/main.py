@@ -1215,37 +1215,99 @@ class FolderStructureApp(QMainWindow):
         co.clicked.connect(dlg.accept); br.addWidget(co); cl.addLayout(br)
         if dlg.exec() != QDialog.DialogCode.Accepted: return
         # Two-phase rename
-        abs_map={}
+        # ── Pre-flight conflict detection ─────────────────────────────────────
+        #
+        # A true conflict is when the desired NEW name is already occupied by a
+        # file/folder that is NOT part of this rename batch (i.e. it will still
+        # be there after phase 1 moves everything to temp names).
+        #
+        # Items that are renaming INTO each other (e.g. A→B, B→C) are NOT
+        # conflicts — after phase 1 all originals are gone, so the target is free.
+        #
+        # We compute this by checking whether the final path would be occupied
+        # by something outside our ops set.  We collect all original resolved
+        # paths first so we know which names will be vacated by phase 1.
+
+        abs_map = {}   # original abs → current temp abs (filled during phase 1)
+
         def _resolve(p):
-            for op in sorted(abs_map,key=len,reverse=True):
-                cp=abs_map[op]
-                if p==op: return cp
-                if p.startswith(op+os.sep): return cp+p[len(op):]
+            for op in sorted(abs_map, key=len, reverse=True):
+                cp = abs_map[op]
+                if p == op: return cp
+                if p.startswith(op + os.sep): return cp + p[len(op):]
             return p
-        renamed=[]; failed=[]; skipped=[]; conflicts=[]; phase2=[]
-        for old_abs,new_abs,old_name,new_name in ops:
-            old_r=_resolve(old_abs)
+
+        # Collect all original resolved paths that will be vacated in phase 1
+        orig_resolved = {}   # old_abs → resolved path before any rename
+        for old_abs, new_abs, old_name, new_name in ops:
+            orig_resolved[old_abs] = old_abs   # placeholder; refined below
+
+        # Set of paths that will be vacated (freed) once phase 1 runs
+        will_be_vacated = set()
+        for old_abs, new_abs, old_name, new_name in ops:
+            will_be_vacated.add(os.path.normcase(old_abs))
+
+        renamed = []; failed = []; skipped = []; conflicts = []; phase2 = []
+        clean_ops = []   # ops that pass conflict pre-check
+
+        for old_abs, new_abs, old_name, new_name in ops:
+            if not os.path.exists(old_abs):
+                skipped.append(f'SKIPPED  "{old_name}"\n  Path not found: {old_abs}')
+                continue
+            parent   = os.path.dirname(old_abs)
+            final    = os.path.join(parent, new_name)
+            norm_final = os.path.normcase(final)
+            # Conflict = target exists AND is not vacated by this batch
+            if os.path.exists(final) and norm_final not in will_be_vacated:
+                conflicts.append(
+                    f'CONFLICT  "{old_name}"  →  "{new_name}"\n'
+                    f'  A file/folder named "{new_name}" already exists in:\n'
+                    f'  {parent}\n'
+                    f'  Original "{old_name}" was NOT renamed — no data lost.')
+            else:
+                clean_ops.append((old_abs, new_abs, old_name, new_name))
+
+        # ── Phase 1: rename each clean item to a guaranteed-unique temp name ──
+        for old_abs, new_abs, old_name, new_name in clean_ops:
+            old_r  = _resolve(old_abs)
             if not os.path.exists(old_r):
-                skipped.append(f'SKIPPED  "{old_name}"\n  Path not found: {old_r}'); continue
-            parent=os.path.dirname(old_r)
-            tmp=os.path.join(parent,f"__structify_tmp_{uuid.uuid4().hex}")
+                skipped.append(f'SKIPPED  "{old_name}"\n  Path not found: {old_r}')
+                continue
+            parent = os.path.dirname(old_r)
+            tmp    = os.path.join(parent, f"__structify_tmp_{uuid.uuid4().hex}")
             try:
-                os.rename(old_r,tmp); abs_map[old_abs]=tmp
-                phase2.append((tmp,os.path.join(parent,new_name),old_r,old_name,new_name))
+                os.rename(old_r, tmp)
+                abs_map[old_abs] = tmp
+                phase2.append((tmp, os.path.join(parent, new_name), old_r, old_name, new_name))
             except Exception as e:
-                failed.append(f'FAILED p1 "{old_name}"\n  {e}')
-        for tmp,final,orig,old_name,new_name in phase2:
+                failed.append(f'FAILED phase1  "{old_name}"\n  {e}')
+
+        # ── Phase 2: temp → final name, with rollback on failure ──
+        for tmp, final, orig, old_name, new_name in phase2:
+            # After phase 1 all originals are vacated — target should be free.
+            # If it still exists here it means two ops share the same final name
+            # (e.g. both A and B want to become C), which is an ambiguous batch.
             if os.path.exists(final):
-                try: os.rename(tmp,orig); note="Original preserved."
-                except Exception as re2: note=f"⚠ RESTORE FAILED: {tmp}\n  {re2}"
-                conflicts.append(f'CONFLICT "{old_name}" → "{new_name}"\n  Target exists.\n  {note}')
+                try:
+                    os.rename(tmp, orig)
+                    note = "Original name restored — no data lost."
+                except Exception as re2:
+                    note = (f"⚠ RESTORE FAILED — file still at temp name:\n"
+                            f"  {tmp}\n  Rename it back to: {os.path.basename(orig)}\n  {re2}")
+                conflicts.append(
+                    f'CONFLICT  "{old_name}"  →  "{new_name}"\n'
+                    f'  Two items in this batch map to the same target name.\n'
+                    f'  {note}')
                 continue
             try:
-                os.rename(tmp,final); renamed.append(f"{old_name}  →  {new_name}")
+                os.rename(tmp, final)
+                renamed.append(f"{old_name}  →  {new_name}")
             except Exception as e:
-                try: os.rename(tmp,orig); rb="  (✔ rolled back)"
-                except Exception as re2: rb=f"  ⚠ ROLLBACK FAILED: {tmp}\n  {re2}"
-                failed.append(f'FAILED p2 "{old_name}" → "{new_name}"\n  {e}\n{rb}')
+                try:   os.rename(tmp, orig); rb = "  (✔ rolled back to original)"
+                except Exception as re2:
+                    rb = (f"  ⚠ ROLLBACK FAILED — file still at temp name:\n"
+                          f"  {tmp}\n  Rename it back to: {os.path.basename(orig)}\n  {re2}")
+                failed.append(f'FAILED phase2  "{old_name}"  →  "{new_name}"\n  {e}\n{rb}')
         # Result dialog
         sl=[]
         if renamed: sl.append(f"✅  Renamed {len(renamed)} item(s) successfully.\n"); sl.extend(f"  {r}" for r in renamed)
