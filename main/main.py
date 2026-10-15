@@ -11,6 +11,7 @@ indent shortcuts).
 """
 import sys
 import os
+import re
 import subprocess
 import json
 import uuid
@@ -24,11 +25,11 @@ from PyQt6.QtWidgets import (
     QCheckBox, QFrame, QTabWidget, QSizePolicy, QListWidget, QComboBox, QMenu,
 )
 from PyQt6.QtCore import (
-    Qt, QSize, QRect, QRectF, QPoint, QEvent, QTimer, QMimeData, pyqtSignal,
+    Qt, QSize, QRect, QRectF, QPoint, QPointF, QEvent, QTimer, QMimeData, pyqtSignal,
 )
 from PyQt6.QtGui import (
     QFont, QFontDatabase, QFontInfo, QFontMetrics, QColor, QPainter,
-    QPalette, QTextBlockFormat, QTextCursor, QTextFormat, QPen,
+    QPalette, QTextBlockFormat, QTextCursor, QTextFormat, QPen, QTextBlockUserData,
 )
 
 LAST_PATHS_FILE = "structify_last_paths.json"
@@ -297,6 +298,160 @@ def build_tree_diagram(lines, root_name="project"):
     return "\n".join(result)
 
 
+# ── Hierarchical sorting of previews ─────────────────────────────────────────
+# Sorting never breaks a tree: the children of a folder stay below THEIR folder,
+# only siblings (entries of the same folder) change their order.
+
+_GLYPH_ITEM = re.compile(r"^((?:│   |    )*)([├└]── )(.*)$")
+_GLYPH_DECOR = re.compile(r"^[│ ]*$")
+
+
+def natural_key(text):
+    """Case-insensitive 'natural' key: file2 < file10, a < B."""
+    out = []
+    for part in re.split(r"(\d+)", text.casefold()):
+        if part == "":
+            continue
+        if part.isdecimal():
+            z = part.lstrip("0")
+            out.append((0, len(z), z))
+        else:
+            out.append((1, 0, part))
+    return out
+
+
+class _SortNode:
+    __slots__ = ("indent", "idx", "body", "extras", "kids")
+
+    def __init__(self, indent, idx, body=""):
+        self.indent, self.idx, self.body = indent, idx, body
+        self.extras, self.kids = [], []
+
+
+def _order_siblings(kids, mode, tags, name_of):
+    if len(kids) < 2:
+        return kids
+    if mode == "orig":
+        run, keyed = -1, []
+        for k in kids:
+            t = tags[k.idx]
+            if t is not None:
+                run = t
+            keyed.append((run, k))
+        keyed.sort(key=lambda x: x[0])            # stable: untagged lines stay put
+        return [k for _, k in keyed]
+    return sorted(kids, key=lambda k: (natural_key(name_of(k)), name_of(k)),
+                  reverse=(mode == "desc"))
+
+
+def _glyph_bare_name(body):
+    return re.split(r"\s+#", body, maxsplit=1)[0].strip().rstrip("/").strip()
+
+
+def _tree_is_file(name):
+    return "." in name and not name.startswith(".")
+
+
+def _arrange_indent(lines, mode, tags):
+    root = _SortNode(-1, -1)
+    stack, head, last, all_nodes = [root], [], None, [root]
+    for i, ln in enumerate(lines):
+        if not ln.strip():
+            if last is None:
+                head.append(i)
+            else:
+                last.extras.append(i)
+            continue
+        ind = len(ln) - len(ln.lstrip())
+        while len(stack) > 1 and stack[-1].indent >= ind:
+            stack.pop()
+        node = _SortNode(ind, i)
+        stack[-1].kids.append(node)
+        stack.append(node)
+        all_nodes.append(node)
+        last = node
+    name_of = lambda k: lines[k.idx].strip()                      # noqa: E731
+    for nd in all_nodes:
+        nd.kids = _order_siblings(nd.kids, mode, tags, name_of)
+    out = list(head)
+    st = list(reversed(root.kids))
+    while st:
+        nd = st.pop()
+        out.append(nd.idx)
+        out.extend(nd.extras)
+        st.extend(reversed(nd.kids))
+    if sorted(out) != list(range(len(lines))):                    # safety net
+        return None
+    return [lines[i] for i in out], out
+
+
+def _arrange_glyph(lines, mode, tags):
+    root = _SortNode(-1, -1)
+    stack, head, last, all_nodes = [], [], None, [root]
+    for i, ln in enumerate(lines):
+        m = _GLYPH_ITEM.match(ln)
+        if m:
+            depth = len(m.group(1)) // 4
+            while stack and stack[-1].indent >= depth:
+                stack.pop()
+            node = _SortNode(depth, i, m.group(3))
+            (stack[-1] if stack else root).kids.append(node)
+            stack.append(node)
+            all_nodes.append(node)
+            last = node
+        elif last is None:
+            head.append(i)
+        elif _GLYPH_DECOR.match(ln):
+            continue                      # connector / spacer lines are re-drawn
+        else:
+            last.extras.append(i)         # foreign text travels with its entry
+    name_of = lambda k: _glyph_bare_name(k.body)                  # noqa: E731
+    for nd in all_nodes:
+        nd.kids = _order_siblings(nd.kids, mode, tags, name_of)
+    flat, st = [], []
+    for j in range(len(root.kids) - 1, -1, -1):
+        st.append((root.kids[j], "", j == len(root.kids) - 1, 0))
+    while st:
+        nd, prefix, is_last, depth = st.pop()
+        flat.append((nd, prefix, is_last, depth))
+        cp = prefix + ("    " if is_last else "│   ")
+        ks = nd.kids
+        for j in range(len(ks) - 1, -1, -1):
+            st.append((ks[j], cp, j == len(ks) - 1, depth + 1))
+    out, src = [lines[i] for i in head], list(head)
+    for k, (nd, prefix, is_last, depth) in enumerate(flat):
+        out.append(prefix + ("└── " if is_last else "├── ") + nd.body)
+        src.append(nd.idx)
+        for x in nd.extras:
+            out.append(lines[x])
+            src.append(x)
+        if nd.kids and not _tree_is_file(_glyph_bare_name(nd.body)):
+            out.append(prefix + ("    " if is_last else "│   ") + "│")
+            src.append(None)
+        if k + 1 < len(flat) and flat[k + 1][3] == 0:
+            out.append("│")
+            src.append(None)
+    n_items = sum(1 for ln in lines if _GLYPH_ITEM.match(ln))
+    if len(flat) != n_items:                                      # safety net
+        return None
+    return out, src
+
+
+def arrange_tree_lines(lines, mode, tags=None):
+    """Re-order the entries of a tree preview.
+
+    mode: 'asc' | 'desc' (natural, case-insensitive) | 'orig' (by tags).
+    tags[i] = original position of line i (or None for a new line).
+    Returns (new_lines, src) — src[j] = index of the input line that became
+    output line j (None for re-drawn connector lines) — or None if the text
+    cannot be re-ordered safely."""
+    if tags is None:
+        tags = [None] * len(lines)
+    if any(_GLYPH_ITEM.match(ln) for ln in lines):
+        return _arrange_glyph(lines, mode, tags)
+    return _arrange_indent(lines, mode, tags)
+
+
 # ── Safe renaming engine ─────────────────────────────────────────────────────
 
 RENAME_TMP_PREFIX = "__structify_tmp_"
@@ -534,6 +689,87 @@ class _ColumnToggle(QWidget):
         p.end()
 
 
+class _SortTag(QTextBlockUserData):
+    """Remembers the ORIGINAL position of a line while a preview is sorted."""
+    def __init__(self, idx):
+        super().__init__()
+        self.idx = idx
+
+
+class _SortToggle(QWidget):
+    """Overlay icon next to the column icon: click 1 = A→Z, click 2 = Z→A,
+    click 3 = original order again (per editor)."""
+    SIZE = 22
+    TIPS = (
+        "Sort this window\nNow: original order  \u00b7  click = A \u2192 Z",
+        "Sort this window\nNow: A \u2192 Z  \u00b7  click = Z \u2192 A",
+        "Sort this window\nNow: Z \u2192 A  \u00b7  click = back to the original order",
+    )
+
+    def __init__(self, editor):
+        super().__init__(editor.viewport())
+        self._ed = editor
+        self._hover = False
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setMouseTracking(True)
+        self.refresh()
+
+    def refresh(self):
+        self.setToolTip(self.TIPS[self._ed.sort_state()])
+        self.update()
+
+    def enterEvent(self, e):
+        self._hover = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self.update()
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._ed.cycle_sort()
+            self._ed.setFocus(Qt.FocusReason.OtherFocusReason)
+            e.accept()
+        else:
+            e.ignore()
+
+    def paintEvent(self, e):
+        st = self._ed.sort_state()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        r = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        if st:
+            bg, border, fg = QColor(THEME["selection"]), QColor("#5b8def"), QColor("#ffffff")
+        else:
+            bg = QColor("#2b2d30" if not self._hover else "#34373c")
+            border = QColor(THEME["border"])
+            fg = QColor("#c9ccd3" if self._hover else "#8b8f97")
+        p.setPen(QPen(border, 1))
+        p.setBrush(bg)
+        p.drawRoundedRect(r, 4, 4)
+        lens = {0: (8, 8, 8), 1: (4, 7, 10), 2: (10, 7, 4)}[st]
+        p.setPen(QPen(fg, 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        for y, ln in zip((7.0, 11.0, 15.0), lens):
+            p.drawLine(QPointF(4.5, y), QPointF(4.5 + ln, y))
+        if st:                                   # arrow: down = A→Z, up = Z→A
+            x = 17.5
+            p.setPen(QPen(fg, 1.4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                          Qt.PenJoinStyle.RoundJoin))
+            p.drawLine(QPointF(x, 6.0), QPointF(x, 16.0))
+            if st == 1:
+                p.drawLine(QPointF(x, 16.0), QPointF(x - 2.5, 13.2))
+                p.drawLine(QPointF(x, 16.0), QPointF(x + 2.5, 13.2))
+            else:
+                p.drawLine(QPointF(x, 6.0), QPointF(x - 2.5, 8.8))
+                p.drawLine(QPointF(x, 6.0), QPointF(x + 2.5, 8.8))
+        p.end()
+
+
 class LineNumberedEditor(QTextEdit):
     """PyCharm-style plain-text editor.
 
@@ -552,6 +788,7 @@ class LineNumberedEditor(QTextEdit):
     text_changed = pyqtSignal()
     zoom_requested = pyqtSignal(int)      # +1 / -1 / 0 (= reset)
     column_mode_changed = pyqtSignal(bool)
+    sort_state_changed = pyqtSignal(int)      # 0 original, 1 A-Z, 2 Z-A
 
     def __init__(self, parent=None, strip_blank_lines=True):
         super().__init__(parent)
@@ -564,6 +801,10 @@ class LineNumberedEditor(QTextEdit):
         self._col_join = False        # next typed text joins the previous undo step
         self._dragging = False
         self._caret_on = True
+        self._sort_state = 0
+        self._sort_orig_text = None
+        self._sort_last_text = None
+        self._sort_clean = True       # text still equals what the sort produced
         self._compare_selections = []
         self._line_h = 16.0
         self._ascent = 12
@@ -591,6 +832,7 @@ class LineNumberedEditor(QTextEdit):
         self._blink.setInterval(max(250, flash // 2) if flash > 1 else 500)
         self._blink.timeout.connect(self._blink_tick)
         self._toggle = _ColumnToggle(self)
+        self._sort_btn = _SortToggle(self)
         self.viewport().installEventFilter(self)
         self.setFont(make_editor_font())      # -> changeEvent -> _sync_metrics
         self._sync_metrics()
@@ -660,6 +902,7 @@ class LineNumberedEditor(QTextEdit):
         """Load content (normalised). Resets scroll position and colours."""
         self._compare_selections = []
         self._col_join = False
+        self._reset_sort()
         super().setPlainText(normalize_text(text, self._strip_blank))
         self._apply_line_format()
         if self._col_mode:
@@ -892,6 +1135,114 @@ class LineNumberedEditor(QTextEdit):
                            QTextCursor.MoveMode.KeepAnchor)
         self.setTextCursor(c)
         self.setFocus()
+
+    # ── sorting (A→Z, Z→A, original) ─────────────────────────────────────────
+    def sort_state(self):
+        return self._sort_state
+
+    def _reset_sort(self):
+        changed = self._sort_state != 0
+        self._sort_state = 0
+        self._sort_orig_text = None
+        self._sort_last_text = None
+        self._sort_clean = True
+        if hasattr(self, "_sort_btn"):
+            self._sort_btn.refresh()
+        if changed:
+            self.sort_state_changed.emit(0)
+
+    def cycle_sort(self):
+        """original -> A→Z -> Z→A -> original. Only the ORDER of the lines
+        changes (children stay under their folder); nothing is added or lost."""
+        text = self.toPlainText()
+        if not text.strip():
+            return False
+        doc = self.document()
+        lines = text.split("\n")
+        state = self._sort_state
+        tags, b = [], doc.firstBlock()
+        while b.isValid():
+            ud = b.userData()
+            tags.append(ud.idx if isinstance(ud, _SortTag) else None)
+            b = b.next()
+        if len(tags) != len(lines):
+            tags = [None] * len(lines)
+        if state == 0:
+            tags = list(range(len(lines)))
+        cur = self.textCursor()
+        cl, col = cur.blockNumber(), cur.positionInBlock()
+
+        if state == 0:
+            self._sort_clean = True
+        elif text != self._sort_last_text:
+            self._sort_clean = False          # edited while sorted
+        exact = (state == 2 and self._sort_clean and self._sort_orig_text is not None)
+        if exact:
+            new_text = self._sort_orig_text
+            new_lines = new_text.split("\n")
+            new_tags = [None] * len(new_lines)
+            t = None
+            for j in range(cl, -1, -1):              # caret -> its original line
+                if tags[j] is not None:
+                    t = tags[j]
+                    break
+            new_line = t if t is not None and t < len(new_lines) else 0
+        else:
+            mode = ("asc", "desc", "orig")[state]
+            res = arrange_tree_lines(lines, mode, tags)
+            if res is None:
+                return False
+            new_lines, src = res
+            new_text = "\n".join(new_lines)
+            new_tags = ([None] * len(new_lines) if mode == "orig"
+                        else [tags[x] if x is not None else None for x in src])
+            new_line = next((j for j, x in enumerate(src) if x == cl),
+                            min(cl, len(new_lines) - 1))
+
+        if state == 0:
+            self._sort_orig_text = text
+        was_busy = self._col_busy
+        self._col_busy = True
+        try:
+            doc.setUndoRedoEnabled(False)          # a re-ordering is a view change
+            try:
+                ec = QTextCursor(doc)
+                ec.beginEditBlock()
+                ec.select(QTextCursor.SelectionType.Document)
+                ec.insertText(new_text)
+                ec.endEditBlock()
+            finally:
+                doc.setUndoRedoEnabled(True)
+            self._apply_line_format()
+            blk = doc.firstBlock()
+            for t in new_tags:
+                if not blk.isValid():
+                    break
+                blk.setUserData(_SortTag(t) if t is not None else None)
+                blk = blk.next()
+            self._compare_selections = []
+            nb = doc.findBlockByNumber(max(0, min(new_line, doc.blockCount() - 1)))
+            c = QTextCursor(nb)
+            c.setPosition(nb.position() + min(col, len(nb.text())))
+            self.setTextCursor(c)
+            if self._col_mode:
+                n, cc = nb.blockNumber(), c.positionInBlock()
+                self._block = (n, cc, n, cc)
+                self._goal_col = cc
+            self.ensureCursorVisible()
+        finally:
+            self._col_busy = was_busy
+        self._col_join = False
+        self._sort_state = (state + 1) % 3
+        self._sort_last_text = new_text if self._sort_state else None
+        if not self._sort_state:
+            self._sort_orig_text = None
+        self._refresh_selections()
+        self._gutter.update()
+        self.viewport().update()
+        self._sort_btn.refresh()
+        self.sort_state_changed.emit(self._sort_state)
+        return True
 
     # ── column selection / multi-cursor ──────────────────────────────────────
     def column_mode(self):
@@ -1375,12 +1726,15 @@ class LineNumberedEditor(QTextEdit):
 
     # toggle icon -----------------------------------------------------------
     def _place_toggle(self):
-        if not hasattr(self, "_toggle"):
+        if not hasattr(self, "_sort_btn"):
             return
         vp = self.viewport()
         t = self._toggle
         t.move(max(0, vp.width() - t.width() - 8), 6)
         t.raise_()
+        sb = self._sort_btn
+        sb.move(max(0, t.x() - sb.width() - 4), 6)
+        sb.raise_()
 
     def eventFilter(self, obj, ev):
         if obj is self.viewport() and ev.type() == QEvent.Type.Resize:
@@ -1892,7 +2246,7 @@ class FolderStructureApp(QMainWindow):
             "Green = the same name exists in both (at the same depth).  "
             "Yellow = only on this side.  Order does not matter.  "
             "Editor: Shift+Alt+↑/↓ move line · Ctrl+D duplicate · Tab/Shift+Tab indent · "
-            "Ctrl+Wheel zoom · Column mode: Alt+Shift+Insert / Ctrl+Alt+Insert or the corner icon.")
+            "Ctrl+Wheel zoom · Column mode: Alt+Shift+Insert / Ctrl+Alt+Insert or the corner icon · Sort icon: A→Z, Z→A, original.")
         hint.setStyleSheet(self.LS)
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -2007,7 +2361,7 @@ class FolderStructureApp(QMainWindow):
             "RIGHT = the desired new names, one per line, in the same order.  "
             "Use  →  to copy left to right, then edit.  "
             "Shift+Alt+↑/↓ moves lines · Ctrl+D duplicates a line · "
-            "Column mode (multi-cursor): Alt+Shift+Insert / Ctrl+Alt+Insert or the corner icon.")
+            "Column mode (multi-cursor): Alt+Shift+Insert / Ctrl+Alt+Insert or the corner icon · Sort icon: A→Z, Z→A, original.")
         hint.setStyleSheet(self.LS)
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -2217,7 +2571,7 @@ class FolderStructureApp(QMainWindow):
             "Click Generate Tree to build a ├── └── │ diagram with  # ← description  "
             "placeholders — you can write the descriptions straight into the result.  "
             "Export saves  directory_structure_explained.md  into the source folder.  "
-            "Column mode (multi-cursor): Alt+Shift+Insert / Ctrl+Alt+Insert or the corner icon.")
+            "Column mode (multi-cursor): Alt+Shift+Insert / Ctrl+Alt+Insert or the corner icon · Sort icon: A→Z, Z→A, original.")
         hint.setStyleSheet(self.LS)
         hint.setWordWrap(True)
         lay.addWidget(hint)

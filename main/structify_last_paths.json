@@ -1,8 +1,8 @@
 {
-  "left": "C:\\Users\\Sicaja\\OneDrive\\02_Bussines\\01_official\\01_DB_light\\2026.01.28_ProfessionalPORTFOLIO_Official\\01_ATS_CV_optimization\\01_db",
+  "left": "C:/Users/Sicaja/Desktop/test",
   "right": "C:/Users/Sicaja/Desktop/test",
   "left_recursive": false,
-  "left_folders": false,
+  "left_folders": true,
   "left_files": true,
   "left_ignore": true,
   "right_recursive": false,
