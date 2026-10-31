@@ -1,0 +1,16 @@
+{
+  "left": "",
+  "right": "",
+  "left_recursive": false,
+  "left_folders": true,
+  "left_files": false,
+  "left_ignore": false,
+  "right_recursive": false,
+  "right_folders": true,
+  "right_files": false,
+  "right_ignore": false,
+  "ignore_hidden": true,
+  "ignore_custom": [],
+  "font_family": "Cascadia Mono",
+  "font_size": 11
+}

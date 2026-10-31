@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import json
+import html
 import uuid
 from datetime import date
 from typing import NamedTuple
@@ -450,6 +451,218 @@ def arrange_tree_lines(lines, mode, tags=None):
     if any(_GLYPH_ITEM.match(ln) for ln in lines):
         return _arrange_glyph(lines, mode, tags)
     return _arrange_indent(lines, mode, tags)
+
+
+# ── Create folders from a tree diagram ───────────────────────────────────────
+# Reads the  ├── └── │  diagram of Tab 3 and plans / creates its FOLDERS.
+# Files are never created. Nothing is ever deleted, overwritten or moved.
+
+_TREE_COMMENT = re.compile(r"(?:\s+#(?=[\s←]|$)|\s{2,}#)")
+# well-known file names that have no extension (they would look like folders)
+_NO_EXT_FILES = frozenset({
+    "makefile", "dockerfile", "license", "licence", "readme", "changelog",
+    "procfile", "vagrantfile", "jenkinsfile", "gemfile", "rakefile", "codeowners",
+    "authors", "contributors", "notice", "copying", "manifest", "pipfile",
+    "brewfile", "justfile", "caddyfile", "gradlew", "mvnw",
+})
+
+
+class TreeEntry(NamedTuple):
+    line_no: int       # 1-based line in the diagram
+    name: str          # clean name (no comment, no trailing "/")
+    parent: int        # index of the parent entry, -1 = directly below the root
+    is_dir: bool
+
+
+def _tree_clean_name(text):
+    """Name part of a diagram line: comment cut off. Returns (name, slash)."""
+    name = _TREE_COMMENT.split(text, maxsplit=1)[0].strip()
+    if name.startswith("#") or name.startswith("`"):
+        return "", False
+    slash = name.endswith("/")
+    return name.rstrip("/").strip(), slash
+
+
+_DOT_FILES = frozenset({
+    ".gitignore", ".gitattributes", ".gitmodules", ".gitkeep", ".dockerignore",
+    ".env", ".editorconfig", ".npmrc", ".nvmrc", ".prettierrc", ".eslintrc",
+    ".babelrc", ".htaccess", ".flake8", ".pylintrc", ".ds_store", ".npmignore",
+    ".prettierignore", ".eslintignore", ".gitconfig", ".bashrc", ".zshrc",
+})
+
+
+def _tree_looks_like_file(name):
+    """Files are skipped. Folders: no dot (src), dot-folders (.git, .idea) —
+    anything that looks like  name.ext  or a well-known extension-less file is a file."""
+    low = name.lower()
+    if low in _NO_EXT_FILES or low in _DOT_FILES:
+        return True
+    if name.endswith("."):
+        return False
+    if name.startswith("."):
+        return "." in name[1:]            # .eslintrc.json = file, .git = folder
+    return "." in name
+
+
+def parse_tree_diagram(text):
+    """-> (root_name or None, [TreeEntry], [(line_no, text) not understood])"""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    root, root_found, seen_item = None, False, False
+    raw, unknown, stack = [], [], []        # raw: [line_no, name, parent, slash]
+    for no, ln in enumerate(lines, 1):
+        if not ln.strip():
+            continue
+        m = _GLYPH_ITEM.match(ln)
+        if m:
+            seen_item = True
+            name, slash = _tree_clean_name(m.group(3))
+            if not name:
+                unknown.append((no, ln.strip()))
+                continue
+            depth = len(m.group(1)) // 4
+            while stack and stack[-1][0] >= depth:
+                stack.pop()
+            parent = stack[-1][1] if stack else -1
+            raw.append([no, name, parent, slash])
+            stack.append((depth, len(raw) - 1))
+        elif _GLYPH_DECOR.match(ln):
+            continue
+        elif not seen_item and not root_found:
+            name, slash = _tree_clean_name(ln)
+            if name and slash:                # the generated diagram starts with  name/
+                root, root_found = name, True
+            else:
+                unknown.append((no, ln.strip()))
+        else:
+            unknown.append((no, ln.strip()))
+    has_kids = {r[2] for r in raw if r[2] >= 0}
+    entries = [TreeEntry(r[0], r[1], r[2],
+                         bool(r[3] or i in has_kids or not _tree_looks_like_file(r[1])))
+               for i, r in enumerate(raw)]
+    return root, entries, unknown
+
+
+def refine_entries_from_disk(root_name, entries, source_root):
+    """The diagram alone cannot tell an extension-less FILE (e.g. .git/config)
+    from a folder. When the tree was made from a real folder (source_root) that
+    still exists, ask the disk. Entries with children always stay folders."""
+    if not root_name or not source_root or not os.path.isdir(source_root):
+        return entries
+    if _key(os.path.basename(os.path.normpath(source_root))) != _key(root_name):
+        return entries
+    has_kids = {e.parent for e in entries if e.parent >= 0}
+    chains, out = [], []
+    for i, e in enumerate(entries):
+        chain = (chains[e.parent] if e.parent >= 0 else []) + [e.name]
+        chains.append(chain)
+        is_dir = e.is_dir
+        if i not in has_kids and validate_new_name(e.name) is None:
+            real = os.path.join(source_root, *chain)
+            if os.path.isdir(real):
+                is_dir = True
+            elif os.path.lexists(real):
+                is_dir = False
+        out.append(e._replace(is_dir=is_dir))
+    return out
+
+
+class FolderPlanItem:
+    """One folder of the plan. status: new | exists | duplicate | created |
+    conflict | invalid | blocked | failed"""
+    __slots__ = ("line_no", "rel", "path", "parent", "status", "reason")
+
+    def __init__(self, line_no, rel, path, parent, status, reason=""):
+        self.line_no, self.rel, self.path = line_no, rel, path
+        self.parent, self.status, self.reason = parent, status, reason
+
+    @property
+    def rel_text(self):
+        return "/".join(self.rel)
+
+
+_FOLDER_BAD = ("conflict", "invalid", "blocked", "failed")
+
+
+def plan_tree_folders(root_name, entries, dest):
+    """Plan (no disk change). Returns (items, skipped_files) where skipped_files
+    is a list of (line_no, name)."""
+    items, skipped, seen = [], [], {}
+
+    def add(line_no, rel, parent, name):
+        if parent >= 0 and items[parent].status in _FOLDER_BAD:
+            items.append(FolderPlanItem(line_no, rel, None, parent, "blocked",
+                                        "the folder above it cannot be created"))
+            return
+        err = validate_new_name(name)
+        base = items[parent].path if parent >= 0 else dest
+        path = os.path.join(base, name) if not err else None
+        if not err and _key(os.path.dirname(path)) != _key(base):
+            err = "The name would leave the destination folder."
+        if err:
+            items.append(FolderPlanItem(line_no, rel, None, parent, "invalid", err))
+            return
+        k = _key(path)
+        if k in seen:                       # same folder listed twice
+            first = items[seen[k]]
+            if first.status in _FOLDER_BAD:
+                items.append(FolderPlanItem(line_no, rel, path, parent, first.status,
+                                            first.reason))
+            else:
+                items.append(FolderPlanItem(line_no, rel, path, parent, "duplicate",
+                                            "listed twice — created only once"))
+            return
+        seen[k] = len(items)
+        if os.path.isdir(path):
+            items.append(FolderPlanItem(line_no, rel, path, parent, "exists"))
+        elif os.path.lexists(path):
+            items.append(FolderPlanItem(line_no, rel, path, parent, "conflict",
+                                        "a file with this name already exists"))
+        else:
+            items.append(FolderPlanItem(line_no, rel, path, parent, "new"))
+
+    top = -1
+    if root_name:
+        add(0, (root_name,), -1, root_name)
+        top = 0
+    index = {}                                   # entry index -> item index
+    for i, e in enumerate(entries):
+        if not e.is_dir:
+            skipped.append((e.line_no, e.name))
+            continue
+        p = index[e.parent] if e.parent >= 0 else top
+        rel = (items[p].rel if p >= 0 else ()) + (e.name,)
+        add(e.line_no, rel, p, e.name)
+        index[i] = len(items) - 1
+    return items, skipped
+
+
+def create_planned_folders(items):
+    """Create every 'new' folder (parents first). Uses os.mkdir only — never
+    deletes, overwrites or moves anything. Updates item.status / reason."""
+    firsts = {}
+    for it in items:
+        if it.parent >= 0 and items[it.parent].status in _FOLDER_BAD:
+            if it.status in ("new", "exists", "duplicate"):
+                it.status, it.reason = "blocked", "the folder above it was not created"
+            continue
+        if it.path is not None:
+            k = _key(it.path)
+            first = firsts.setdefault(k, it)
+            if first is not it and it.status == "duplicate" and first.status in _FOLDER_BAD:
+                it.status, it.reason = first.status, first.reason
+        if it.status != "new":
+            continue
+        try:
+            os.mkdir(it.path)
+            it.status = "created"
+        except FileExistsError:
+            if os.path.isdir(it.path):
+                it.status = "exists"
+            else:
+                it.status, it.reason = "conflict", "a file with this name already exists"
+        except OSError as e:
+            it.status, it.reason = "failed", e.strerror or str(e)
+    return items
 
 
 # ── Safe renaming engine ─────────────────────────────────────────────────────
@@ -2571,6 +2784,7 @@ class FolderStructureApp(QMainWindow):
             "Click Generate Tree to build a ├── └── │ diagram with  # ← description  "
             "placeholders — you can write the descriptions straight into the result.  "
             "Export saves  directory_structure_explained.md  into the source folder.  "
+            "Create Folders builds the folders of the tree on disk (files are skipped).  "
             "Column mode (multi-cursor): Alt+Shift+Insert / Ctrl+Alt+Insert or the corner icon · Sort icon: A→Z, Z→A, original.")
         hint.setStyleSheet(self.LS)
         hint.setWordWrap(True)
@@ -2608,6 +2822,14 @@ class FolderStructureApp(QMainWindow):
                                "inside the source folder.")
         b_exp.clicked.connect(self._export_tree)
         row.addWidget(b_exp)
+        b_mk = self._make_btn("📁  Create Folders from Tree",
+                              self._btn_style("#7b4fc4", 200), 28,
+                              "Create the FOLDERS of the tree diagram on disk "
+                              "(you choose where). Files are skipped; nothing "
+                              "existing is changed or overwritten.")
+        b_mk.clicked.connect(self._create_folders_from_tree)
+        row.addWidget(b_mk)
+        self.btn_t3_create_folders = b_mk
         outer.addWidget(content, stretch=1)
 
     def _browse_t3(self):
@@ -2663,6 +2885,140 @@ class FolderStructureApp(QMainWindow):
             QMessageBox.critical(self, "Error", f"Export failed:\n{e}")
             return
         self._show_export_ok(out, "Tree diagram exported.")
+
+    # ── Create folders from the tree diagram (Tab 3) ─────────────────────────
+    def _text_dialog(self, title, header_html, body, ok_text, cancel_text=None,
+                     extra_button=None):
+        """Modal dialog with a read-only text body. Returns (accepted, extra_clicked)."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.resize(760, 520)
+        cl = QVBoxLayout(dlg)
+        cl.setContentsMargins(16, 16, 16, 12)
+        cl.setSpacing(8)
+        hdr = QLabel(header_html)
+        hdr.setWordWrap(True)
+        cl.addWidget(hdr)
+        sc = QPlainTextEdit()
+        sc.setReadOnly(True)
+        sc.setFont(make_editor_font(10))
+        sc.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        sc.setPlainText(body)
+        cl.addWidget(sc, stretch=1)
+        br = QHBoxLayout()
+        br.setSpacing(10)
+        clicked = {"extra": False}
+        if extra_button:
+            eb = QPushButton(extra_button[0])
+            eb.setFixedHeight(30)
+
+            def on_extra():
+                clicked["extra"] = True
+                extra_button[1]()
+            eb.clicked.connect(on_extra)
+            br.addWidget(eb)
+        br.addStretch()
+        if cancel_text:
+            cn = QPushButton(cancel_text)
+            cn.setFixedSize(110, 30)
+            cn.clicked.connect(dlg.reject)
+            br.addWidget(cn)
+        ok = QPushButton(ok_text)
+        ok.setFixedHeight(30)
+        ok.setMinimumWidth(110)
+        ok.setStyleSheet("background-color:#7b4fc4;color:white;font-weight:bold;"
+                         "border-radius:4px;padding:2px 12px;")
+        ok.clicked.connect(dlg.accept)
+        br.addWidget(ok)
+        cl.addLayout(br)
+        (cn if cancel_text else ok).setDefault(True)
+        return dlg.exec() == QDialog.DialogCode.Accepted, clicked["extra"]
+
+    @staticmethod
+    def _folder_plan_lines(items):
+        mark = {"new": "+ create ", "created": "+ created ", "exists": "= exists  ",
+                "duplicate": "= twice   ", "conflict": "! SKIPPED ", "invalid": "! SKIPPED ",
+                "blocked": "! SKIPPED ", "failed": "! FAILED  "}
+        out = []
+        for it in items:
+            line = f"{mark.get(it.status, '? ')}{it.rel_text}/"
+            if it.status in ("conflict", "invalid", "blocked", "failed") and it.reason:
+                line += f"    ({it.reason})"
+            out.append(line)
+        return out
+
+    def _create_folders_from_tree(self):
+        text = self.tree_output.toPlainText()
+        if not text.strip():
+            QMessageBox.warning(self, "Create Folders",
+                                "The tree is empty.\nClick Generate Tree first.")
+            return
+        root_name, entries, unknown = parse_tree_diagram(text)
+        if not entries:
+            QMessageBox.warning(
+                self, "Create Folders",
+                "No tree diagram found (lines like  ├── name  /  └── name).\n"
+                "Click Generate Tree first. Nothing was created.")
+            return
+        src = self.t3_left_path_edit.text().strip()
+        start = src if src and os.path.isdir(src) else os.path.expanduser("~")
+        dest = QFileDialog.getExistingDirectory(
+            self, "Select the folder in which the tree should be created", start)
+        if not dest:
+            return
+        dest = os.path.normpath(dest)
+        if not os.path.isdir(dest):
+            QMessageBox.warning(self, "Create Folders",
+                                f"This is not a valid folder:\n{dest}\nNothing was created.")
+            return
+        entries = refine_entries_from_disk(root_name, entries, src)
+        items, skipped_files = plan_tree_folders(root_name, entries, dest)
+        n_new = sum(1 for i in items if i.status == "new")
+        n_exist = sum(1 for i in items if i.status in ("exists", "duplicate"))
+        n_bad = sum(1 for i in items if i.status in _FOLDER_BAD)
+        summary = (f"<b>{n_new}</b> folder(s) will be created, {n_exist} already exist, "
+                   f"{len(skipped_files)} file(s) skipped (only folders are created)"
+                   + (f", <b>{n_bad}</b> folder(s) cannot be created" if n_bad else "")
+                   + (f", {len(unknown)} line(s) not understood" if unknown else "")
+                   + f".<br>Inside:<br><code>{html.escape(dest)}</code>")
+        if n_new == 0:
+            body = "\n".join(self._folder_plan_lines(items)) or "(no folders in the tree)"
+            self._text_dialog("Create Folders", "<b>Nothing to create.</b><br>" + summary,
+                              body, "OK")
+            return
+        body = "\n".join(self._folder_plan_lines(items))
+        if skipped_files:
+            body += "\n\nSkipped files (not created):\n" + "\n".join(
+                f"  {n}" for _, n in skipped_files)
+        if unknown:
+            body += "\n\nLines not understood (ignored):\n" + "\n".join(
+                f"  line {no}: {t}" for no, t in unknown)
+        accepted, _ = self._text_dialog("Confirm Create Folders",
+                                        "About to create folders.<br>" + summary,
+                                        body, "Create Folders", "Cancel")
+        if not accepted:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            create_planned_folders(items)
+        finally:
+            QApplication.restoreOverrideCursor()
+        made = sum(1 for i in items if i.status == "created")
+        existed = sum(1 for i in items if i.status in ("exists", "duplicate"))
+        problems = [i for i in items if i.status in _FOLDER_BAD]
+        head = f"\u2705  Created {made} folder(s)."
+        if existed:
+            head += f"  {existed} already existed (left untouched)."
+        if skipped_files:
+            head += f"  {len(skipped_files)} file(s) skipped."
+        if problems:
+            head += f"  \u26a0\ufe0f  {len(problems)} folder(s) could not be created."
+        full = "\n".join(self._folder_plan_lines(items))
+        root_open = items[0].path if (root_name and items and items[0].path) else dest
+        self._text_dialog(
+            "Create Folders — Done", head + f"<br><code>{html.escape(dest)}</code>",
+            full, "OK", extra_button=("Open Folder", lambda: self._open_folder(
+                root_open if os.path.isdir(root_open) else dest)))
 
     # ── Tab 1 → Tab 2/3: first load only, afterwards every tab is independent ─
     def _on_left_changed(self):

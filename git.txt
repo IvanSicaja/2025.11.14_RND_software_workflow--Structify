@@ -1,0 +1,365 @@
+Pycharm: Enable Column Selection Mode: Alt + Shift + Insert (toggle on/off).
+
+# often used paths
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+cd C:/Users/Sicaja/Desktop/DB/05_DB_business-structures-and-light-Assets/2019.01.01_SmartCodeACADEMY_Official/2025.11.14_GH_RND_software_workflow--Structify
+
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# Only first time -> Git Initialization and First Commit
+local autorization	git config --global user.email ivansicaja@outlook.com
+local autorization	git config --global user.name IvanSicaja
+
+
+# Git Initialization and First Commit
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+cd C:/Users/Sicaja/Desktop/DB/05_DB_business-structures-and-light-Assets/2019.01.01_SmartCodeACADEMY_Official/2026.07.14_GitHub_PRJ_WavePro
+git init
+git remote add origin https://github.com/IvanSicaja/2026.10.15_RND_datascience_rca--system-test-lab.git
+git remote set-url https://github.com/IvanSicaja/2026.10.15_RND_datascience_rca--system-test-lab.git
+
+git remote set-url origin https://github.com/IvanSicaja/2025.12.15_RND_software_automation--EyeGuard.git
+git remote -v
+
+git add .
+git commit -m "v.0.0.0.1"
+git push origin main
+
+# Prompt start
+Entferne keine Funktionalitäten, ändere keine Funktionalitäten, nur es ist notwendig, Folgendes zu implementieren.
+
+# Subsequent Commits
+v0.0.1 - project structure set up
+v1.6.0 - .exe release | beta
+v1.5.4 - .exe release | gamma
+# -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+git log --oneline
+git status
+git add .
+git status
+git log --oneline
+
+git commit -m "
+v1.6.5 - .exe release | gamma
+
+### TODOs / To Fix
+
+### Fixed / Improved
+- removed .idea tracking
+- automated .exe creation and cleanup
+- added unique git for this project
+
+### Added / New Features
+- create folders from three button
+
+### Additional Comment
+
+### All Req
+
+"
+
+git push origin main
+git log --oneline
+
+
+# Fixing commits
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+| Reset Mode        |  Commit History (`HEAD`) | Staging Files (Index) | Local Files (Working Directory) | Relative Command             | Commit ID Command (remain commit id you entered |
+| ------------------| :----------------------: | :-------------------: | :-----------------------------: | ---------------------------- | ----------------------------------------------- |
+| Soft              |            ✅            |           ❌         |                ❌                | git reset --soft HEAD~1     | git reset --soft commit id                      |
+| Mixed *(default)* |            ✅            |           ✅         |                ❌                | git reset HEAD~1            | git reset commit id                             |
+                                                                                                          | git reset --mixed HEAD~1    | git reset --mixed commit id                     |
+| Hard              |            ✅            |           ✅         |                ✅                | git reset --hard HEAD~1     | git reset --hard commit id                      |
+
+# edit only commit message LAST COMMIT, committed file, staging and local files stays unchanged
+git commit --amend -m "v0.0.2 - Initial version of Scrapify job scraper with PyQt6 GUI"
+git push --force-with-lease origin main
+# or (less safe but common):
+git push -f origin main
+
+# edit only commit message LAST COMMIT, committed file, staging and local files stays unchanged
+git log --oneline
+git rebase -i 68f760c~   # abc1234 = hash of the commit BEFORE the one you want to change because then we will see comments which are coming
+    # r, reword <commit> = use commit, but edit the commit message
+    #pick def4567 Fix login
+    #pick 89abcde Add feature
+# 3. pick bad1234 Typo in comment  ← this is your bad one
+# 4. Change pick to reword (or just r) on the line of the commit you want to fix
+# 5. Edit it → save & close.
+
+
+getting files from commit and not deleting anything
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+git restore --source a1b2c3d .
+
+# renaming online repo and fix new commit in not updated online
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+# 1. Check where this repository is pushing
+git remote -v
+
+# 2. Check your current branch
+git branch --show-current
+
+# 3. Check your newest local commit
+git log -1 --oneline
+
+# 4. Check the newest commit currently on GitHub
+git fetch origin
+git log -1 --oneline origin/main
+
+
+# branches editing
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+# List and change between branches
+# ---------------------------------------------------------
+# List local branches
+git branch
+# or more detailed
+git branch -v
+
+# List remote branches
+git branch -r
+
+# List ALL branches (local + remote) with one command
+git branch -a
+
+# Show current branch with asterisk (*)
+git branch
+
+# Switch to an existing local branch
+git switch branch-name
+# or classic way (still widely used)
+git checkout branch-name
+
+# Quick switch to previous branch you were on
+git switch -
+# or
+git checkout -
+
+# Switch to a remote branch (creates local tracking branch automatically)
+git switch -c new-local-name origin/remote-branch-name
+# or classic:
+git checkout -b new-local-name origin/remote-branch-name
+
+
+# Rename a branch
+# ---------------------------------------------------------
+# Current branch
+git branch -m new-name
+
+# Any branch
+git branch -m old-name new-name
+
+# Delete a branch
+# ---------------------------------------------------------
+# Local branch (safe – errors if not merged)
+git branch -d branch-name
+
+# Force delete (even if not merged)
+git branch -D branch-name
+
+git push origin --delete branch-name
+# or
+git push origin :branch-name
+
+# Delete remote branch
+# ---------------------------------------------------------
+git push origin --delete branch-name
+# or
+git push origin :branch-name
+
+
+# Python Environment Info and Requirements
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+python -v
+pip freeze > requirements_python-3.11.9.txt
+
+
+# Python Environment Setup
+# --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+python -m pip install --upgrade pip setuptools wheel
+python -m venv .venv
+.venv/Scripts/activate
+pip install --only-binary :all: -r requirements_python-3.11.9.txt
+
+
+# Smooth Install in PowerShell with Admin Rights
+# ----------------------------------------
+cd "C:/Users/Sicaja/Desktop/SmartCodeACADEMY/0.0_Channel_topics/0000.00.03_Python-Venvs/3-heavy/2023.10.31_GitHub_PRJ_Medical-AI-Diagnosis-System---Full-stack"
+.venv/Scripts/activate
+
+Get-Content requirements_python-3.11.9.txt | ForEach-Object {
+    try {
+        pip install $_
+    } catch {
+        Write-Host "Failed to install: $_"
+    }
+}
+
+
+git branch 		#to see all local branches
+
+git checkout -b dev     # create dev branch
+git checkout main	# switch to main branch
+git checkout dev	# switch to dev branch
+
+git checkout main       # go to main branch
+git pull origin main    # make sure it's up to date
+git merge dev           # merge in everything from dev
+
+git checkout main                  			 # updates your whole working directory to main
+git checkout dev -- requirements_python-3.11.9.txt	 # This doesn’t switch branch, instead, it copys the file from <branch> into the current branch.
+git add src/backend.py            			 # stage the copied file
+git commit -m "Update backend.py from dev branch"        # save change in main
+git push origin main              			 # push main branch to GitHub
+
+git branch -m new-branch-name 		#command to rename the current branch
+git branch -m old-name new-name		#command to rename a different branch
+
+
+# Check email configuration and rewrite commits history to the new email
+# ------------------------------------------------------------------------------------------------------------------------
+
+cd C:/Users/Sicaja/Desktop/DB/DB-Bussiness/2019.01.01_SmartCodeACADEMY/1.0_Projects/2025.11.24_GitHub_PRJ_Scene-Master
+
+# Commands to Check Current Git Email Config
+git config user.email  # Local repo
+git config --global user.email  # Global (affects all repos)
+git config --list | grep user.email  # All emails
+
+# check the status of the matching local and the remote repository
+git log --oneline
+
+
+# Update global config (affects all future/local repos):
+
+git config --global --unset-all user.email
+git config --global --unset-all user.name
+git config --global user.email "ivansicaja@outlook.com"
+git config --global user.name "IvanSicaja"
+
+#For each repo with old commits, rewrite history (example for main branch):
+git filter-branch --env-filter '
+WRONG_EMAIL="ivansicaja.poslovno@gmail.com"
+CORRECT_EMAIL="ivansicaja@outlook.com"
+CORRECT_NAME="IvanSicaja"
+if [ "$GIT_COMMITTER_EMAIL" = "$WRONG_EMAIL" ] || [ "$GIT_AUTHOR_EMAIL" = "$WRONG_EMAIL" ]
+then
+    export GIT_COMMITTER_EMAIL="$CORRECT_EMAIL"
+    export GIT_AUTHOR_EMAIL="$CORRECT_EMAIL"
+    export GIT_COMMITTER_NAME="$CORRECT_NAME"
+    export GIT_AUTHOR_NAME="$CORRECT_NAME"
+fi
+' --tag-name-filter cat -- --branches --tags
+git push --force-with-lease origin --all --tags  # Force-push (coordinate if shared!)
+
+# if dont work execute this one, this commits local history oneline
+git push --force-with-lease origin main
+
+# LFS setup
+# ------------------------------------------------------------------------------------------------------------------------
+Case 1: First commit (repo is empty or brand new)
+
+git lfs install
+git lfs track "*.xlsx" "*.csv" "*.zip" "*.mp4" "*.pdf" "*.db"
+git add .gitattributes
+git add .
+git commit ...
+git push
+
+
+Case 2: You already have commits (large files are already in Git history normally)
+
+# 1. Installation
+git lfs install
+
+# 2. Make sure tracking is active (you already did this)
+git lfs track "*.xlsx" "*.csv" "*.zip" "*.mp4" "*.pdf" "*.db"
+git add .gitattributes
+git commit -m "Track xlsx with LFS"   # if not already committed, unless they all files will be deleted
+
+# 3. Rewrite ALL history to migrate existing large files to LFS
+git lfs migrate import --include="*.xlsx" --everything
+
+# 4. Force-push the rewritten history
+#    (WARNING: only if this is your personal repo or nobody else uses it yet!)
+
+# Most people in your situation (personal repo, fixing LFS once)
+git push origin --force main
+
+# If you see tags with 'git tag':
+# git push origin --force --tags
+# Only if you actually work on multiple branches:
+# git push origin --force --all
+# git push origin --force --tags
+
+
+
+# clean git repository from files >100mb
+# remove git LFS
+# rewrite history
+# ------------------------------------------------------------------------------------------------------------------------
+
+# 1) (OPTIONAL BUT STRONGLY RECOMMENDED)
+# Create a full backup of your remote repository on wanted local folder where you want to have the backup copy
+cd C:/Users/Sicaja/Desktop/t
+git clone --mirror https://github.com/Confidential-ZONE/Central-HUB.git
+
+
+# 2) Make sure you are inside your main repository folder
+C:/Users/Sicaja/Desktop/ch
+
+Press Windows key and type: Manage app execution aliases→ Hit Enter → opens Settings > Apps > Advanced app settings > App execution aliases (or similar path in newer Windows)
+In the list, find python.exe and python3.exe (there are usually two entries each, or just these) -> Toggle both OFF (switch to disabled / greyed out) -> This disables the Microsoft Store redirectors/stubs -> It does not uninstall Python — it just stops Windows from hijacking the python command with its broken redirector
+
+python --version
+or
+python3 --version
+
+pip install git-filter-repo
+
+# 3) Remove ALL files larger than 100MB from entire Git history - your local files will NOT be deleted or modified by this command.
+# This rewrites history and removes large blobs permanently form .git histroy
+git filter-repo --strip-blobs-bigger-than 100M
+
+
+# 4) Completely disable Git LFS in this repository
+git lfs uninstall
+
+
+# 5) Remove LFS tracking file from Git index (if it exists)
+git rm --cached .gitattributes
+
+
+# 6) Commit removal of LFS configuration
+git commit -m "Remove Git LFS tracking"
+
+
+# 7) Add large file patterns or folders to .gitignore
+# (Edit .gitignore manually before running next command)
+git add .gitignore
+
+
+# 8) Commit updated ignore rules
+git commit -m "Ignore large files and folders"
+
+
+# 9) Force push rewritten history to remote (required after filter-repo)
+git push --force --all
+
+
+# 10) Force push tags as well
+git push --force --tags
+
+
+# 11) (OPTIONAL) Check repository size after cleanup
+git count-objects -vH
+
+
+
+
+# ------------------------------------------------------------------------------------------------------------------------
+prompt
+Okay. Ändere keine Funktionalitäten, lösche keine Funktionalitäten, nur es ist notwendig, Folgendes zu implementieren. Diese Bearbeitungsoption ist ein bisschen verbessert, aber noch es funktioniert nicht gut. Zum Beispiel, falls wir drücken diese Ikon und möchten etwa ändern Namen, dann drücken wir diese Ikon, dann darf grün sein. Aber jetzt es ist noch rot und noch ich kann etwas ändern. Und wenn ich drücke diese Ikon zweiten Mal, dann es ist nicht möglich, jetzt Namen ändern. Mit Enter alles funktioniert gut. Und zum Beispiel, falls wir drücken diese Ikon ersten Mal und machen keine Namenänderung, dann wir drücken diese Ikon zweiten Mal und alles ist in Ordnung. Aber Problem kommt, wenn wir ändern Namen, dann wir brauchen diese Ikon noch zweimal drücken. Das es ist in diesem Modus, dass wir können nicht Namen ändern. So, du darfst das implementieren. Zweite Ding, wir brauchen Sortierungsoptionen irgendwo haben, wo ist, ja, genau, professionell Weg. Ja, mache das, wie es ist professionell zum Beispiel, es darf sortiert sein alphanumerically. Wir können Option haben, dass wir haben auch.Auch dass wir haben die Option alphanumerische Sortierung rückwärts. Auch es darf total am linken Seite hinzugefügt Nummer. Zum Beispiel dann wir können, wie viel Lied jetzt wir können sehen. Aber das darf, zum Beispiel wie haben wir in Code-Editor, zum Beispiel PyCharm, das darf total am linken Seite sein und das ist nicht in dieser Spalte, wo haben wir Titel. Es ist andere Spalte, welche ist, ja, neue Spalte, welche ist total links und das ist unabhängig von alles. Zum Beispiel, da darf ja immer, bis wir können scrollen, wir dürfen da immer Nummers haben. Dritte Ding, welche funktioniert nicht gut, zum Beispiel Rating. Falls ich andere Rating, Rating ist geändert hier in Anwendung. Aber zum Beispiel, falls ich gehe in diese physische Datei, dann auf Englisch...I go to properties, then to details, and then rating. And actually, I change this rating to four stars, and in the physical file it is five stars. It looks that is every time when I have any kind of rating in this app, it is every time five-star rating in the physical file. Those two things should be identical. So every rating which we have in the app, it should be exactly the same one which we have in this option when we go in the physical file, properties, details, rating. Those two should be identical always, because focus of this app is every time monitor what we have written in those physical files or write down info in those physical files directly. Not to have some independent infos which are not written in this physical file.Und vierte Ding, welche funktioniert nicht so gut, zum Beispiel, ich ändere Rating in dieser Anwendung. Und jetzt dieser Lead go irgendwo weg. Also es ist alles, dieser Lead ist möglich ja finden, aber es bewegt sich. Das nicht möglich darf sein. Immer was wir ändern, es darf genau an diesem Platz, wo wir hatten, dieser Lead sein. Zum Beispiel, zumindest, wann wir ändern diese Sterne oder Sterne-Rating oder Kategorie, was wir natürlich, wir werden Name ändern, dann ja, es hängt ab, welche Sortierung wir haben. Dann zum Beispiel, falls Anfang von diesem Lead oder so, irgendwelche relevante Buchstabe ist geändert, dann zum Beispiel, falls es war Anfang von Name A, jetzt es ist Anfang mit Name D, dann ja, diese Lead darf sich bewegen genau, wo es darf stehen. Sortiert alphanumerisch. So, jetzt es wird irgendwo, ja wie sortiert darf sein, genau mit diesen Leadern, welche anfangen mit Buchstabe D sein, so. Mache, aktualisiere das und mache das, diese Anwendung funktioniert so professionell, so wie in Produktion geliefert Anwendung. Das ist mir so wichtig. Und immer, das ist immer Fokus. Und es wird immer die nächste Botschaft, welche ich schicke dir, muss sein. Im ganzen Chat so. Wir dürfen keine doppelten Infos haben. Eine Infos hier in Anwendung und andere Infos in physischen Dateien. Das muss immer lesen, was haben wir in physischen Dateien, oder immer schreiben, was wir machen irgendwelche Änderungen, immer schreiben direkt in diese physischen Dateien und uns zeigen, was ist da geschrieben. Danke. Weil ja, diese Anwendung ist nur Graphical User Interface. Danke.
